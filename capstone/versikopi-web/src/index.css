@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+@theme {
+  --color-kopi-dark: #4a2c1a;
+  --color-kopi-main: #7a4a2e;
+  --color-kopi-light: #c8895a;
+  --color-kopi-cream: #faf6f0;
+}
+
+body {
+  margin: 0;
+  font-family: "Poppins", system-ui, sans-serif;
+  background: var(--color-kopi-cream);
+}
