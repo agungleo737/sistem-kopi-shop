@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { IconBolt, IconChart, IconCashier, IconShield, IconEye } from '../components/Icons';
 import logo from '../assets/logo.png';
 
 export default function Login() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
 
-  const [role, setRole] = useState(null); // 'admin' | 'kasir'
+  const [role, setRole] = useState(null); // pilih role
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -21,26 +22,25 @@ export default function Login() {
   const handleSelectRole = (selectedRole) => {
     setRole(selectedRole);
     setError('');
-    // Otomatis isi email default seeder jika diinginkan untuk kemudahan tes
     setEmail(selectedRole === 'admin' ? 'admin@versikopi.test' : 'kasir@versikopi.test');
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!email || !password) {
+    if (!email.trim() || !password) {
       setError('Email dan password wajib diisi.');
       return;
     }
     setError('');
     setLoading(true);
     try {
-      const u = await login({ email, password, role });
+      const u = await login({ email: email.trim(), password, role });
       navigate(u.role === 'admin' ? '/admin' : '/kasir', { replace: true });
     } catch (err) {
       const res = err.response;
       setError(
         res?.data?.message ||
-          (res ? 'Login gagal. Periksa kembali email & password.' : 'Tidak bisa terhubung ke server Laravel.')
+          (res ? 'Login gagal. Periksa kembali email & password.' : 'Tidak dapat terhubung ke server.')
       );
     } finally {
       setLoading(false);
@@ -51,14 +51,13 @@ export default function Login() {
     <div className="login-screen">
       <div className="login-blob blob-1"></div>
       <div className="login-blob blob-2"></div>
-      <div className="login-blob blob-3"></div>
 
       <div className="login-card">
-        {/* Panel Kiri: Brand & Info Toko */}
+        {/* panel identitas */}
         <div className="login-brand-panel">
           <div className="brand-top">
             <div className="logo-ring">
-              <img src={logo} alt="Logo" />
+              <img src={logo} alt="Versi Kopi" />
             </div>
             <div>
               <div className="eyebrow">Point of Sale</div>
@@ -68,51 +67,55 @@ export default function Login() {
           </div>
 
           <div className="brand-copy">
-            <h2>Kopi Terbaik, Transaksi Lebih Cepat.</h2>
-            <p>Sistem kasir dan manajemen kedai kopi modern terintegrasi.</p>
+            <h2>Operasional Kedai Lebih Rapi & Terukur.</h2>
+            <p>Sistem kasir dan pencatatan inventaris harian untuk pelayanan kedai yang nyaman.</p>
           </div>
 
           <div className="brand-features">
             <div className="feature">
-              <span className="feature-icon">⚡</span>
+              <span className="feature-icon">
+                <IconBolt size={17} />
+              </span>
               <div>
-                <strong>Cepat & Responsif</strong>
-                <small>Proses pesanan kasir tanpa lemot</small>
+                <strong>Transaksi Ringkas</strong>
+                <small>Pencatatan pesanan dan pembayaran terstruktur</small>
               </div>
             </div>
             <div className="feature">
-              <span className="feature-icon">📊</span>
+              <span className="feature-icon">
+                <IconChart size={17} />
+              </span>
               <div>
-                <strong>Laporan Otomatis</strong>
-                <small>Pantau stok dan omzet harian secara instan</small>
+                <strong>Kontrol Inventaris</strong>
+                <small>Pantau ketersediaan stok dan laporan penjualan</small>
               </div>
             </div>
           </div>
 
           <div className="brand-foot">
-            <span className="live-dot"></span>
-            <span>Sistem POS Versi Kopi v1.0 • Siap Melayani</span>
+            <span>Versi Kopi POS • Sistem Internal Kedai</span>
           </div>
         </div>
 
-        {/* Panel Kanan: Form Pilihan Akses & Login */}
+        {/* form login */}
         <div className="login-form-panel">
           <div className="login-heading">
-            <h2>{role ? (role === 'admin' ? 'Masuk sebagai Admin' : 'Masuk sebagai Kasir') : 'Selamat Datang 👋'}</h2>
-            <p>{role ? 'Masukkan kredensial akunmu di bawah ini' : 'Pilih peran kamu untuk mulai bekerja:'}</p>
+            <h2>{role ? (role === 'admin' ? 'Masuk sebagai Admin' : 'Masuk sebagai Kasir') : 'Selamat Datang'}</h2>
+            <p>{role ? 'Masukkan kredensial akun Anda untuk melanjutkan' : 'Pilih akses kerja Anda untuk memulai sesi'}</p>
           </div>
 
-          {/* Kartu Pemilih Peran */}
           <div className="role-grid">
             <button
               type="button"
               className={`role-card ${role === 'kasir' ? 'is-selected' : ''}`}
               onClick={() => handleSelectRole('kasir')}
             >
-              <div className="role-emoji">🧑‍🍳</div>
+              <div className="role-emoji">
+                <IconCashier size={20} />
+              </div>
               <div className="role-text">
                 <strong>Kasir (POS)</strong>
-                <small>Buat pesanan baru, keranjang & pembayaran</small>
+                <small>Pesanan pelanggan, pembayaran & cetak struk</small>
               </div>
               <span className="role-arrow">→</span>
             </button>
@@ -122,10 +125,12 @@ export default function Login() {
               className={`role-card role-admin ${role === 'admin' ? 'is-selected' : ''}`}
               onClick={() => handleSelectRole('admin')}
             >
-              <div className="role-emoji" style={{ color: '#fff' }}>👑</div>
+              <div className="role-emoji" style={{ color: '#f8efe4' }}>
+                <IconShield size={20} />
+              </div>
               <div className="role-text">
                 <strong>Admin / Owner</strong>
-                <small>Laporan omzet, restock stok & kelola menu</small>
+                <small>Ringkasan omzet, stok gudang & manajemen menu</small>
               </div>
               <span className="role-arrow">→</span>
             </button>
@@ -133,21 +138,22 @@ export default function Login() {
 
           {role && (
             <>
-              <div className="divider">KREDENSIAL LOGIN</div>
+              <div className="divider">Kredensial Akun</div>
 
               {error && <div className="login-error show">{error}</div>}
 
-              <form onSubmit={handleSubmit} className="login-form">
+              <form onSubmit={handleSubmit} className="login-form" noValidate>
                 <div className="field">
                   <span className="field-label">Alamat Email</span>
                   <div className="input-wrap">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                       <rect x="3" y="5" width="18" height="14" rx="2" />
                       <path d="m3 7 9 6 9-6" />
                     </svg>
                     <input
                       type="email"
                       required
+                      autoComplete="username"
                       placeholder="nama@versikopi.test"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
@@ -158,23 +164,25 @@ export default function Login() {
                 <div className="field">
                   <span className="field-label">Password</span>
                   <div className="input-wrap">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                       <rect x="3" y="11" width="18" height="11" rx="2" />
                       <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                     </svg>
                     <input
                       type={showPassword ? 'text' : 'password'}
                       required
-                      placeholder="••••••••"
+                      autoComplete="current-password"
+                      placeholder="Masukkan password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                     />
                     <button
                       type="button"
                       className="toggle-pass"
+                      aria-label="Tampilkan password"
                       onClick={() => setShowPassword(!showPassword)}
                     >
-                      {showPassword ? '🙈' : '👁️'}
+                      <IconEye size={16} off={showPassword} />
                     </button>
                   </div>
                 </div>
@@ -184,14 +192,14 @@ export default function Login() {
                   disabled={loading}
                   className={`btn btn-primary btn-block btn-login ${loading ? 'btn-loading' : ''}`}
                 >
-                  {loading ? 'Memproses...' : `Masuk Sebagai ${role === 'admin' ? 'Admin' : 'Kasir'}`}
+                  {loading ? 'Memproses...' : `Masuk sebagai ${role === 'admin' ? 'Admin' : 'Kasir'}`}
                 </button>
               </form>
             </>
           )}
 
           <div className="demo-hint">
-            Default akun login: <strong>admin@versikopi.test</strong> atau <strong>kasir@versikopi.test</strong> (Password: <strong>password</strong>)
+            Akun uji: <strong>admin@versikopi.test</strong> atau <strong>kasir@versikopi.test</strong> (Password: <strong>password</strong>)
           </div>
         </div>
       </div>

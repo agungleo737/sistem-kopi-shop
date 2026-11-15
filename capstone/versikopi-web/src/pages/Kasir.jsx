@@ -1,57 +1,128 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
+import api from '../lib/api';
+import {
+  IconCup,
+  IconReceipt,
+  IconTag,
+  IconBag,
+  IconWallet,
+  IconQr,
+  IconPrinter,
+  IconSearch,
+  IconBook,
+  IconLock,
+  IconAlert,
+  IconLayers,
+  ProductIllustration,
+} from '../components/Icons';
+import { getProductImage } from '../lib/productImages';
 import logo from '../assets/logo.png';
 
 const SUGAR_LEVELS = [
   { value: '100%', name: 'Normal' },
   { value: '75%', name: 'Less' },
   { value: '50%', name: 'Half' },
-  { value: '25%', name: 'Sedikit' },
-  { value: '0%', name: 'No Sugar' }
+  { value: '25%', name: 'Light' },
+  { value: '0%', name: 'Tanpa Gula' },
 ];
+
+const parseOrderItems = (rawItems) => {
+  if (Array.isArray(rawItems)) return rawItems;
+  if (typeof rawItems === 'string') {
+    try {
+      const parsed = JSON.parse(rawItems);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
 
 export default function Kasir() {
   const { user, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState('menu'); // 'menu' | 'history' | 'promos'
+  const [activeTab, setActiveTab] = useState('menu');
 
   const [products, setProducts] = useState([]);
+  const [ingredients, setIngredients] = useState([]);
+  const [recipes, setRecipes] = useState([]);
   const [promos, setPromos] = useState([]);
   const [orders, setOrders] = useState([]);
   const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState(null);
+  const [showAlertDetails, setShowAlertDetails] = useState(false);
 
-  // Filter & Search Menu
+  // filter menu kasir
+  const [menuType, setMenuType] = useState('satuan');
   const [category, setCategory] = useState('Semua');
   const [search, setSearch] = useState('');
 
-  // Cart
+  // filter riwayat pesanan
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyMethod, setHistoryMethod] = useState('all');
+
+  // filter promo
+  const [promoSearch, setPromoSearch] = useState('');
+  const [promoFilterType, setPromoFilterType] = useState('all');
+
+  // form promo toko
+  const [isPromoModalOpen, setIsPromoModalOpen] = useState(false);
+  const [editingPromoId, setEditingPromoId] = useState(null);
+  const [promoFormCode, setPromoFormCode] = useState('');
+  const [promoFormType, setPromoFormType] = useState('percent');
+  const [promoFormValue, setPromoFormValue] = useState('15');
+  const [promoFormMinSubtotal, setPromoFormMinSubtotal] = useState('40000');
+  const [promoFormMaxDiscount, setPromoFormMaxDiscount] = useState('15000');
+  const [promoFormActive, setPromoFormActive] = useState(true);
+  const [savingPromo, setSavingPromo] = useState(false);
+
+  // filter resep
+  const [recipeSearch, setRecipeSearch] = useState('');
+  const [recipeCategory, setRecipeCategory] = useState('Semua');
+
+  // state keranjang
   const [cart, setCart] = useState([]);
+  const [justAddedId, setJustAddedId] = useState(null);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [selectedSize, setSelectedSize] = useState('M');
   const [selectedSugar, setSelectedSugar] = useState('100%');
   const [productQty, setProductQty] = useState(1);
   const [productNote, setProductNote] = useState('');
 
-  // Checkout
+  // state pembayaran
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [cashReceived, setCashReceived] = useState('');
   const [promoCodeInput, setPromoCodeInput] = useState('');
+  const [promoError, setPromoError] = useState('');
   const [appliedPromo, setAppliedPromo] = useState(null);
   const [successOrder, setSuccessOrder] = useState(null);
   const [selectedReceipt, setSelectedReceipt] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [checkoutError, setCheckoutError] = useState('');
 
-  // Ambil Data dari API
+  const showNotice = (text, type = 'success') => {
+    setNotice({ text, type });
+    setTimeout(() => {
+      setNotice((prev) => (prev?.text === text ? null : prev));
+    }, 3500);
+  };
+
   const refreshData = async () => {
     try {
-      const [resProd, resPromo, resSet, resOrd] = await Promise.all([
-        fetch('http://127.0.0.1:8000/api/products').then((r) => r.json()).catch(() => []),
-        fetch('http://127.0.0.1:8000/api/promos').then((r) => r.json()).catch(() => []),
-        fetch('http://127.0.0.1:8000/api/settings').then((r) => r.json()).catch(() => ({})),
-        fetch('http://127.0.0.1:8000/api/orders').then((r) => r.json()).catch(() => ({ orders: [] }))
+      const [resProd, resIng, resRec, resPromo, resSet, resOrd] = await Promise.all([
+        api.get('/products').then((r) => r.data).catch(() => []),
+        api.get('/ingredients').then((r) => r.data).catch(() => ({ ingredients: [] })),
+        api.get('/recipes').then((r) => r.data).catch(() => ({ recipes: [] })),
+        api.get('/promos?all=1').then((r) => r.data).catch(() => []),
+        api.get('/settings').then((r) => r.data).catch(() => ({})),
+        api.get('/orders').then((r) => r.data).catch(() => ({ orders: [] })),
       ]);
       setProducts(Array.isArray(resProd) ? resProd : []);
+      setIngredients(Array.isArray(resIng?.ingredients) ? resIng.ingredients : []);
+      setRecipes(Array.isArray(resRec?.recipes) ? resRec.recipes : []);
       setPromos(Array.isArray(resPromo) ? resPromo : []);
       setSettings(resSet || {});
       setOrders(resOrd.orders || []);
@@ -64,16 +135,207 @@ export default function Kasir() {
     refreshData();
   }, []);
 
-  const categories = ['Semua', ...new Set(products.map((p) => p.category))];
+  // hitung stok bahan bersama
+  const { liveProducts, liveIngredients } = useMemo(() => {
+    const ingMap = {};
+    ingredients.forEach((ing) => {
+      const key = (ing.name || '').trim().toLowerCase();
+      const cur = Number(ing.current_stock ?? ing.stock_amount ?? 0);
+      const max = Math.max(1, Number(ing.max_stock ?? ing.max_amount ?? cur));
+      ingMap[key] = {
+        ...ing,
+        current_stock: cur,
+        max_stock: max,
+      };
+    });
 
-  const filteredProducts = products.filter((p) => {
-    const matchCat = category === 'Semua' || p.category === category;
-    const matchSearch = p.name.toLowerCase().includes(search.toLowerCase());
+    // kurangi stok dari keranjang
+    cart.forEach((cItem) => {
+      const prod = products.find((p) => Number(p.id) === Number(cItem.id));
+      if (!prod || !Array.isArray(prod.recipe_summary)) return;
+      prod.recipe_summary.forEach((rIng) => {
+        const key = (rIng.name || '').trim().toLowerCase();
+        const useAmt =
+          (cItem.size === 'L' ? Number(rIng.amount_l || rIng.amount_m || 0) : Number(rIng.amount_m || 0)) *
+          Number(cItem.qty || 1);
+        if (ingMap[key] && useAmt > 0) {
+          ingMap[key].current_stock = Math.max(0, ingMap[key].current_stock - useAmt);
+        }
+      });
+    });
+
+    const computedIngredients = Object.values(ingMap).map((ing) => {
+      const pct = Math.round((ing.current_stock / ing.max_stock) * 100);
+      return {
+        ...ing,
+        stock_amount: Math.round(ing.current_stock * 10) / 10,
+        max_amount: Math.round(ing.max_stock * 10) / 10,
+        stock_percent: pct,
+        is_locked: pct <= 5,
+        is_warning: pct > 5 && pct <= 20,
+      };
+    });
+
+    // hitung ulang porsi produk
+    const computedProducts = products.map((prod) => {
+      const recSummary = Array.isArray(prod.recipe_summary) ? prod.recipe_summary : [];
+      if (recSummary.length === 0) {
+        return prod;
+      }
+
+      let minPortions = null;
+      let maxPortions = null;
+      let minPct = null;
+      let limitingReason = null;
+
+      recSummary.forEach((rIng) => {
+        const key = (rIng.name || '').trim().toLowerCase();
+        const needM = Number(rIng.amount_m || 0);
+        const stockRow = ingMap[key];
+        if (!stockRow || needM <= 0) return;
+
+        const possible = Math.floor(stockRow.current_stock / needM);
+        const maxPoss = Math.max(1, Math.floor(stockRow.max_stock / needM));
+        const pct = Math.round((stockRow.current_stock / stockRow.max_stock) * 100);
+
+        if (minPortions === null || possible < minPortions) {
+          minPortions = possible;
+          maxPortions = maxPoss;
+          limitingReason = `${stockRow.name} (${Math.round(stockRow.current_stock)} ${stockRow.unit})`;
+        }
+        if (minPct === null || pct < minPct) {
+          minPct = pct;
+        }
+      });
+
+      if (minPortions === null) return prod;
+
+      const stockPct = minPct ?? 100;
+      const isLocked = minPortions <= 3 || stockPct <= 5;
+      const isWarning = !isLocked && (minPortions <= 15 || stockPct <= 20);
+
+      return {
+        ...prod,
+        stock: minPortions,
+        max_stock: maxPortions ?? prod.max_stock ?? 60,
+        stock_percent: stockPct,
+        is_locked: isLocked,
+        is_warning: isWarning,
+        limiting_reason: limitingReason,
+      };
+    });
+
+    return { liveProducts: computedProducts, liveIngredients: computedIngredients };
+  }, [products, ingredients, cart]);
+
+  // cek sisa porsi sebelum batas kunci
+  const getOrderableForProduct = (prod, size = 'M') => {
+    if (!prod) return 0;
+    const recSummary = Array.isArray(prod.recipe_summary) ? prod.recipe_summary : [];
+    if (recSummary.length === 0) {
+      return Math.max(0, Number(prod.stock || 0) - 3);
+    }
+
+    let minOrderable = null;
+    recSummary.forEach((rIng) => {
+      const key = (rIng.name || '').trim().toLowerCase();
+      const need = size === 'L' ? Number(rIng.amount_l || rIng.amount_m || 0) : Number(rIng.amount_m || 0);
+      const ing = liveIngredients.find((i) => (i.name || '').trim().toLowerCase() === key);
+      if (!ing || need <= 0) return;
+
+      const totalPortionsNow = Math.floor(Number(ing.current_stock || 0) / need);
+      const maxPortionsCap = Math.max(1, Math.floor(Number(ing.max_stock || 1) / need));
+      const lockFloor = Math.max(3, Math.floor(maxPortionsCap * 0.05));
+      const canTake = Math.max(0, totalPortionsNow - lockFloor);
+
+      if (minOrderable === null || canTake < minOrderable) {
+        minOrderable = canTake;
+      }
+    });
+
+    return minOrderable ?? Math.max(0, Number(prod.stock || 0) - 3);
+  };
+
+  // pisah menu satuan dan paketan
+  const satuanProducts = liveProducts.filter((p) => (p.item_type || 'satuan') === 'satuan');
+  const paketanProducts = liveProducts.filter((p) => p.item_type === 'paketan');
+
+  const activeTypeProducts = menuType === 'paketan' ? paketanProducts : satuanProducts;
+  const categories = ['Semua', ...new Set(satuanProducts.map((p) => p.category).filter(Boolean))];
+
+  // peringatan dan kunci stok
+  const lockedProducts = liveProducts.filter(
+    (p) => p.is_locked || Number(p.stock) <= 3 || Number(p.stock_percent ?? 100) <= 5
+  );
+  const warningProducts = liveProducts.filter(
+    (p) =>
+      !lockedProducts.some((lp) => lp.id === p.id) &&
+      (p.is_warning || Number(p.stock) <= 15 || Number(p.stock_percent ?? 100) <= 20)
+  );
+  const alertIngredients = liveIngredients.filter((ing) => ing.is_locked || ing.is_warning);
+
+  // filter menu kasir
+  const filteredProducts = activeTypeProducts.filter((p) => {
+    const matchCat = menuType === 'paketan' || category === 'Semua' || p.category === category;
+    const q = search.trim().toLowerCase();
+    const matchBundle =
+      Array.isArray(p.bundle_items) &&
+      p.bundle_items.some((b) => (b.name || '').toLowerCase().includes(q));
+    const matchSearch =
+      !q ||
+      p.name.toLowerCase().includes(q) ||
+      (p.description || '').toLowerCase().includes(q) ||
+      (p.category || '').toLowerCase().includes(q) ||
+      matchBundle;
     return matchCat && matchSearch;
   });
 
+  // filter riwayat transaksi
+  const filteredOrders = orders.filter((o) => {
+    const matchMethod = historyMethod === 'all' || o.payment_method === historyMethod;
+    const q = historySearch.trim().toLowerCase();
+    if (!q) return matchMethod;
+    const orderItems = parseOrderItems(o.items);
+    const matchCode = (o.code || '').toLowerCase().includes(q);
+    const matchCashier = (o.cashier_name || '').toLowerCase().includes(q);
+    const matchItem = orderItems.some((it) => (it.name || '').toLowerCase().includes(q));
+    return matchMethod && (matchCode || matchCashier || matchItem);
+  });
+
+  // filter promo
+  const filteredPromos = promos.filter((p) => {
+    const matchType = promoFilterType === 'all' || p.type === promoFilterType;
+    const q = promoSearch.trim().toLowerCase();
+    const matchSearch = !q || (p.code || '').toLowerCase().includes(q);
+    return matchType && matchSearch;
+  });
+
+  // filter resep
+  const recipedProducts = liveProducts.filter((prod) =>
+    recipes.some((r) => Number(r.product_id) === Number(prod.id))
+  );
+  const filteredRecipeProducts = recipedProducts.filter((prod) => {
+    const matchCat = recipeCategory === 'Semua' || prod.category === recipeCategory;
+    const q = recipeSearch.trim().toLowerCase();
+    if (!q) return matchCat;
+    const rec = recipes.find((r) => Number(r.product_id) === Number(prod.id));
+    const matchName = prod.name.toLowerCase().includes(q);
+    const matchIng = rec?.ingredients?.some((ing) => (ing.name || '').toLowerCase().includes(q));
+    const matchSteps = (rec?.steps || '').toLowerCase().includes(q);
+    return matchCat && (matchName || matchIng || matchSteps);
+  });
+
+  const triggerAddedFeedback = (prodId) => {
+    setJustAddedId(prodId);
+    setTimeout(() => {
+      setJustAddedId((prev) => (prev === prodId ? null : prev));
+    }, 850);
+  };
+
   const openProductModal = (prod) => {
-    if (prod.stock <= 0) return;
+    const canAdd = getOrderableForProduct(prod, 'M');
+    if (prod.is_locked || canAdd <= 0) return;
+
     setSelectedProduct(prod);
     setSelectedSize('M');
     setSelectedSugar('100%');
@@ -83,13 +345,22 @@ export default function Kasir() {
 
   const addToCartFromModal = () => {
     if (!selectedProduct) return;
-    const unitPrice = selectedSize === 'M' ? selectedProduct.price_m : selectedProduct.price_l;
-    const cartItemId = `${selectedProduct.id}-${selectedSize}-${selectedSugar}-${productNote}`;
+    const liveProd = liveProducts.find((p) => p.id === selectedProduct.id) || selectedProduct;
+    const availableToAdd = getOrderableForProduct(liveProd, selectedSize);
+    if (availableToAdd <= 0) {
+      setSelectedProduct(null);
+      return;
+    }
+
+    const cleanNote = productNote.replace(/<\/?[^>]+(>|$)/g, '').trim();
+    const unitPrice = selectedSize === 'M' ? Number(selectedProduct.price_m) : Number(selectedProduct.price_l);
+    const cartItemId = `${selectedProduct.id}-${selectedSize}-${selectedSugar}-${cleanNote}`;
+    const qtyToAdd = Math.min(productQty, availableToAdd);
 
     const existingIndex = cart.findIndex((item) => item.cartItemId === cartItemId);
     if (existingIndex > -1) {
       const updated = [...cart];
-      updated[existingIndex].qty += productQty;
+      updated[existingIndex].qty += qtyToAdd;
       setCart(updated);
     } else {
       setCart([
@@ -98,113 +369,243 @@ export default function Kasir() {
           cartItemId,
           id: selectedProduct.id,
           name: selectedProduct.name,
-          emoji: selectedProduct.emoji || '☕',
+          category: selectedProduct.category,
+          item_type: selectedProduct.item_type || 'satuan',
+          bundle_items: selectedProduct.bundle_items || [],
           gradient: selectedProduct.gradient,
           size: selectedSize,
           sugar: selectedSugar,
-          note: productNote,
+          note: cleanNote,
           unit_price: unitPrice,
-          qty: productQty,
-          stock: selectedProduct.stock
-        }
+          qty: qtyToAdd,
+        },
       ]);
     }
+    triggerAddedFeedback(selectedProduct.id);
     setSelectedProduct(null);
   };
 
   const updateCartQty = (cartItemId, delta) => {
-    setCart((prev) =>
-      prev
+    setCart((prev) => {
+      const targetItem = prev.find((i) => i.cartItemId === cartItemId);
+      if (!targetItem) return prev;
+
+      if (delta > 0) {
+        const liveProd = liveProducts.find((p) => p.id === targetItem.id);
+        const canAddMore = liveProd ? getOrderableForProduct(liveProd, targetItem.size) : 0;
+        if (canAddMore <= 0) return prev;
+      }
+
+      return prev
         .map((item) => {
           if (item.cartItemId === cartItemId) {
             const next = item.qty + delta;
-            return next > 0 ? { ...item, qty: Math.min(next, item.stock) } : null;
+            return next > 0 ? { ...item, qty: next } : null;
           }
           return item;
         })
-        .filter(Boolean)
-    );
+        .filter(Boolean);
+    });
   };
 
   const subtotal = cart.reduce((acc, item) => acc + item.unit_price * item.qty, 0);
 
   let discount = 0;
-  if (appliedPromo) {
+  if (appliedPromo && subtotal >= Number(appliedPromo.min_subtotal || 0)) {
     if (appliedPromo.type === 'percent') {
-      discount = (subtotal * appliedPromo.value) / 100;
-      if (appliedPromo.max_discount > 0 && discount > appliedPromo.max_discount) {
-        discount = appliedPromo.max_discount;
+      discount = Math.round((subtotal * Number(appliedPromo.value)) / 100);
+      if (Number(appliedPromo.max_discount) > 0 && discount > Number(appliedPromo.max_discount)) {
+        discount = Number(appliedPromo.max_discount);
       }
     } else {
-      discount = appliedPromo.value;
+      discount = Number(appliedPromo.value);
     }
+    discount = Math.min(discount, subtotal);
   }
 
   const taxPercent = Number(settings.tax_percent || 0);
-  const tax = Math.round(((subtotal - discount) * taxPercent) / 100);
-  const total = Math.max(0, subtotal - discount + tax);
+  const servicePercent = Number(settings.service_percent || 0);
+  const taxable = Math.max(0, subtotal - discount);
+  const tax = Math.round((taxable * taxPercent) / 100);
+  const service = Math.round((taxable * servicePercent) / 100);
+  const total = Math.max(0, taxable + tax + service);
 
-  const handleApplyPromo = () => {
-    const promo = promos.find((p) => p.code.toUpperCase() === promoCodeInput.trim().toUpperCase());
+  const handleApplyPromo = (directCode = null) => {
+    setPromoError('');
+    const code = (typeof directCode === 'string' ? directCode : promoCodeInput).trim().toUpperCase();
+    if (!code) return;
+    const promo = promos.find((p) => p.code.toUpperCase() === code && p.active);
     if (!promo) {
-      alert('Kode promo tidak valid!');
+      setPromoError('Kode promo tidak ditemukan atau sedang nonaktif.');
       return;
     }
-    if (subtotal < promo.min_subtotal) {
-      alert(`Minimal belanja Rp ${promo.min_subtotal.toLocaleString('id-ID')} untuk promo ini!`);
+    if (subtotal < Number(promo.min_subtotal)) {
+      setPromoError(`Min. belanja Rp ${Number(promo.min_subtotal).toLocaleString('id-ID')}`);
       return;
     }
     setAppliedPromo(promo);
+    setPromoCodeInput('');
+  };
+
+  // kelola promo toko
+  const openAddPromoModal = () => {
+    setEditingPromoId(null);
+    setPromoFormCode('');
+    setPromoFormType('percent');
+    setPromoFormValue('15');
+    setPromoFormMinSubtotal('40000');
+    setPromoFormMaxDiscount('15000');
+    setPromoFormActive(true);
+    setIsPromoModalOpen(true);
+  };
+
+  const openEditPromoModal = (promo) => {
+    setEditingPromoId(promo.id);
+    setPromoFormCode(promo.code);
+    setPromoFormType(promo.type || 'percent');
+    setPromoFormValue(String(promo.value ?? 0));
+    setPromoFormMinSubtotal(String(promo.min_subtotal ?? 0));
+    setPromoFormMaxDiscount(String(promo.max_discount ?? 0));
+    setPromoFormActive(Boolean(promo.active));
+    setIsPromoModalOpen(true);
+  };
+
+  const handleSavePromo = async (e) => {
+    e.preventDefault();
+    if (!promoFormCode.trim()) return;
+    setSavingPromo(true);
+    const payload = {
+      code: promoFormCode.trim().toUpperCase(),
+      type: promoFormType,
+      value: Number(promoFormValue || 0),
+      min_subtotal: Number(promoFormMinSubtotal || 0),
+      max_discount: promoFormType === 'percent' ? Number(promoFormMaxDiscount || 0) : 0,
+      active: promoFormActive,
+    };
+
+    try {
+      if (editingPromoId) {
+        const { data } = await api.put(`/promos/${editingPromoId}`, payload);
+        showNotice(data.message || 'Promo toko berhasil diperbarui.');
+      } else {
+        const { data } = await api.post('/promos', payload);
+        showNotice(data.message || 'Promo toko baru berhasil ditambahkan.');
+      }
+      setIsPromoModalOpen(false);
+      refreshData();
+    } catch (err) {
+      const msg =
+        err.response?.data?.message ||
+        Object.values(err.response?.data?.errors || {})[0]?.[0] ||
+        'Gagal menyimpan promo toko.';
+      showNotice(msg, 'error');
+    } finally {
+      setSavingPromo(false);
+    }
+  };
+
+  const handleTogglePromoActive = async (promo) => {
+    try {
+      await api.put(`/promos/${promo.id}`, {
+        code: promo.code,
+        type: promo.type,
+        value: Number(promo.value),
+        min_subtotal: Number(promo.min_subtotal),
+        max_discount: Number(promo.max_discount || 0),
+        active: !promo.active,
+      });
+      showNotice(`Promo ${promo.code} ${!promo.active ? 'diaktifkan' : 'dinonaktifkan'}.`);
+      refreshData();
+    } catch {
+      showNotice('Gagal mengubah status promo.', 'error');
+    }
+  };
+
+  const handleDeletePromo = async (promo) => {
+    if (!window.confirm(`Hapus kode promo "${promo.code}" secara permanen?`)) return;
+    try {
+      await api.delete(`/promos/${promo.id}`);
+      showNotice(`Promo ${promo.code} berhasil dihapus.`);
+      refreshData();
+    } catch {
+      showNotice('Gagal menghapus promo.', 'error');
+    }
   };
 
   const handleProcessOrder = async () => {
     if (cart.length === 0) return;
+    setCheckoutError('');
+
     if (paymentMethod === 'cash' && Number(cashReceived) < total) {
-      alert('Uang tunai yang diterima masih kurang!');
+      setCheckoutError('Nominal uang tunai yang diterima kurang dari total pembayaran.');
       return;
     }
 
     setIsSubmitting(true);
     try {
       const payload = {
-        cashier_id: user?.id || 2,
-        cashier_name: user?.name || 'Kasir Versi Kopi',
-        items: cart,
-        subtotal,
-        discount,
+        items: cart.map((c) => ({
+          id: c.id,
+          qty: c.qty,
+          size: c.size,
+          sugar: c.sugar,
+          note: c.note,
+        })),
         promo_code: appliedPromo ? appliedPromo.code : null,
-        tax,
-        total,
         payment_method: paymentMethod,
         cash_received: paymentMethod === 'cash' ? Number(cashReceived) : total,
-        change_amount: paymentMethod === 'cash' ? Number(cashReceived) - total : 0
       };
 
-      const res = await fetch('http://127.0.0.1:8000/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
+      const { data } = await api.post('/orders', payload);
 
       if (data.success) {
-        const finishedOrder = { ...payload, code: data.order_code, created_at: new Date().toISOString() };
+        const finishedOrder = {
+          code: data.order_code,
+          cashier_name: user?.name || 'Kasir Versi Kopi',
+          items: data.items || cart,
+          subtotal: data.subtotal ?? subtotal,
+          discount: data.discount ?? discount,
+          tax: data.tax ?? tax,
+          service: data.service ?? service,
+          total: data.total ?? total,
+          payment_method: paymentMethod,
+          cash_received: data.cash_received ?? (paymentMethod === 'cash' ? Number(cashReceived) : total),
+          change_amount: data.change_amount ?? (paymentMethod === 'cash' ? Number(cashReceived) - total : 0),
+          created_at: new Date().toISOString(),
+        };
         setSuccessOrder(finishedOrder);
         setCart([]);
         setAppliedPromo(null);
+        setCashReceived('');
         setIsCheckoutOpen(false);
         refreshData();
       }
-    } catch {
-      alert('Gagal memproses transaksi!');
+    } catch (err) {
+      const msg =
+        err.response?.data?.message ||
+        Object.values(err.response?.data?.errors || {})[0]?.[0] ||
+        'Gagal memproses transaksi. Silakan coba lagi.';
+      setCheckoutError(msg);
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const activeReceipt = successOrder || selectedReceipt;
+  const activeReceiptItems = activeReceipt ? parseOrderItems(activeReceipt.items) : [];
+  const selectedLiveProduct = selectedProduct
+    ? liveProducts.find((p) => p.id === selectedProduct.id) || selectedProduct
+    : null;
+  const selectedProductRecipe = selectedLiveProduct
+    ? recipes.find((r) => Number(r.product_id) === Number(selectedLiveProduct.id))
+    : null;
+  const selectedProductMaxAdd = selectedLiveProduct
+    ? getOrderableForProduct(selectedLiveProduct, selectedSize)
+    : 0;
+
   return (
     <div className="app">
-      {/* SIDEBAR PERSIS TEMENMU */}
+      {/* sidebar kasir */}
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="logo-ring small">
@@ -216,27 +617,28 @@ export default function Kasir() {
           </div>
         </div>
 
-        <div className="shift-card">
-          <span className="shift-live">● Kasir Aktif</span>
-          <strong>{user?.name || 'Kasir'}</strong>
-          <small>Shift Sedang Berjalan</small>
-        </div>
-
         <nav className="nav">
           <button
             type="button"
             className={`nav-item ${activeTab === 'menu' ? 'active' : ''}`}
             onClick={() => setActiveTab('menu')}
           >
-            <span className="nav-icon">☕</span>
+            <span className="nav-icon">
+              <IconCup size={18} />
+            </span>
             <span>Menu Kasir</span>
+            {(lockedProducts.length > 0 || warningProducts.length > 0) && (
+              <span className="nav-badge">{lockedProducts.length + warningProducts.length}</span>
+            )}
           </button>
           <button
             type="button"
             className={`nav-item ${activeTab === 'history' ? 'active' : ''}`}
             onClick={() => setActiveTab('history')}
           >
-            <span className="nav-icon">🧾</span>
+            <span className="nav-icon">
+              <IconReceipt size={18} />
+            </span>
             <span>Riwayat Pesanan</span>
           </button>
           <button
@@ -244,29 +646,50 @@ export default function Kasir() {
             className={`nav-item ${activeTab === 'promos' ? 'active' : ''}`}
             onClick={() => setActiveTab('promos')}
           >
-            <span className="nav-icon">🎁</span>
+            <span className="nav-icon">
+              <IconTag size={18} />
+            </span>
             <span>Promo Toko</span>
+            <span className="nav-badge">{promos.filter((p) => p.active).length}</span>
+          </button>
+          <button
+            type="button"
+            className={`nav-item ${activeTab === 'recipes' ? 'active' : ''}`}
+            onClick={() => setActiveTab('recipes')}
+          >
+            <span className="nav-icon">
+              <IconBook size={18} />
+            </span>
+            <span>Panduan Resep</span>
           </button>
         </nav>
 
         <div className="sidebar-foot">
           <button className="btn btn-ghost btn-block btn-sm" onClick={logout}>
-            Keluar (Logout)
+            Keluar Sesi
           </button>
         </div>
       </aside>
 
-      {/* KONTEN UTAMA */}
+      {/* konten utama */}
       <main className="app-main">
         <header className="topbar">
           <div className="topbar-title">
-            <h1>{activeTab === 'menu' ? 'Menu Kasir' : activeTab === 'history' ? 'Riwayat Transaksi' : 'Promo Spesial'}</h1>
-            <p>Sistem Kasir & Pesanan Toko Kopi</p>
+            <h1>
+              {activeTab === 'menu'
+                ? 'Kasir & Pemesanan'
+                : activeTab === 'history'
+                ? 'Riwayat Transaksi'
+                : activeTab === 'promos'
+                ? 'Promo Toko'
+                : 'Resep & Takaran'}
+            </h1>
+            <p>Stok bahan baku</p>
           </div>
 
           <div className="topbar-actions">
             <div className="user-chip">
-              <div className="avatar">K</div>
+              <div className="avatar">{(user?.name || 'K').charAt(0).toUpperCase()}</div>
               <div className="user-chip-text">
                 <strong>{user?.name || 'Kasir'}</strong>
                 <small>Petugas Kasir</small>
@@ -275,128 +698,396 @@ export default function Kasir() {
           </div>
         </header>
 
+        {notice && (
+          <div className="toast-root">
+            <div className={`toast ${notice.type}`}>
+              <div className="toast-content">
+                <strong>{notice.type === 'error' ? 'Perhatian' : 'Berhasil'}</strong>
+                <small>{notice.text}</small>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="view">
-          {/* TAB 1: MENU KASIR & KERANJANG */}
+          {/* menu kasir dan keranjang */}
           {activeTab === 'menu' && (
             <div className="cashier-layout">
-              <div>
-                <section className="menu-hero">
-                  <div>
-                    <h2>Halo, {user?.name?.split(' ')[0] || 'Kasir'} ☕</h2>
-                    <p>Pilih menu favorit pelanggan, atur varian gula & ukuran, lalu selesaikan transaksi.</p>
+              <div className="pos-catalog-col">
+                {/* info peringatan stok */}
+                {(lockedProducts.length > 0 || warningProducts.length > 0 || alertIngredients.length > 0) && (
+                  <div className="pos-alert-bar">
+                    <div className="pos-alert-summary">
+                      <span className="pos-alert-badge-icon">
+                        <IconAlert size={16} />
+                      </span>
+                      <div className="pos-alert-text">
+                        <strong>Status Stok Bahan Gudang:</strong>
+                        {lockedProducts.length > 0 && (
+                          <span className="pos-alert-chip locked">
+                            <IconLock size={12} /> {lockedProducts.length} Menu Terkunci (≤5% / ≤3)
+                          </span>
+                        )}
+                        {warningProducts.length > 0 && (
+                          <span className="pos-alert-chip warning">
+                            {warningProducts.length} Menu Menipis (≤20% / ≤15)
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="pos-alert-toggle"
+                        onClick={() => setShowAlertDetails((v) => !v)}
+                      >
+                        {showAlertDetails ? 'Sembunyikan Rincian' : 'Lihat Rincian Bahan'}
+                      </button>
+                    </div>
+
+                    {showAlertDetails && (
+                      <div className="pos-alert-drawer">
+                        {lockedProducts.length > 0 && (
+                          <div className="pos-alert-section">
+                            <small>Terkunci Otomatis (Sisa ≤ 5% atau ≤ 3 porsi):</small>
+                            <div className="pos-alert-pill-list">
+                              {lockedProducts.map((p) => (
+                                <span key={p.id} className="pos-mini-alert locked">
+                                  <strong>{p.name}</strong> ({p.stock} porsi • {p.stock_percent}%)
+                                  {p.limiting_reason ? ` — ${p.limiting_reason}` : ''}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {warningProducts.length > 0 && (
+                          <div className="pos-alert-section">
+                            <small>Peringatan Stok Menipis (Sisa ≤ 20% atau ≤ 15 porsi):</small>
+                            <div className="pos-alert-pill-list">
+                              {warningProducts.map((p) => (
+                                <span key={p.id} className="pos-mini-alert warning">
+                                  <strong>{p.name}</strong> ({p.stock} porsi • {p.stock_percent}%)
+                                  {p.limiting_reason ? ` — ${p.limiting_reason}` : ''}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div className="hero-stats">
-                    <div className="hero-stat">
-                      <strong>{products.length}</strong>
-                      <small>Menu Aktif</small>
+                )}
+
+                {/* filter jenis menu dan pencarian */}
+                <div className="pos-command-bar">
+                  <div className="pos-command-top">
+                    <div className="pos-segmented" role="tablist" aria-label="Jenis Menu">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={menuType === 'satuan'}
+                        className={`pos-seg-btn ${menuType === 'satuan' ? 'active' : ''}`}
+                        onClick={() => setMenuType('satuan')}
+                      >
+                        <IconCup size={16} />
+                        <span>Menu Satuan</span>
+                        <em className="pos-seg-count">{satuanProducts.length}</em>
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={menuType === 'paketan'}
+                        className={`pos-seg-btn ${menuType === 'paketan' ? 'active' : ''}`}
+                        onClick={() => setMenuType('paketan')}
+                      >
+                        <IconLayers size={16} />
+                        <span>Menu Paketan</span>
+                        <em className="pos-seg-count">{paketanProducts.length}</em>
+                      </button>
+                    </div>
+
+                    <div className="pos-search-wrap">
+                      <IconSearch size={16} />
+                      <input
+                        type="text"
+                        placeholder={
+                          menuType === 'paketan'
+                            ? 'Cari nama paket atau isi bundling...'
+                            : 'Cari kopi, matcha, pastry, atau bahan...'
+                        }
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                      />
+                      {search && (
+                        <button type="button" className="search-clear" onClick={() => setSearch('')}>
+                          ✕
+                        </button>
+                      )}
                     </div>
                   </div>
-                </section>
 
-                <div className="menu-toolbar">
-                  <div className="search-box">
-                    <input
-                      type="text"
-                      placeholder="Cari kopi, tea, snack..."
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                    />
-                  </div>
-                  <div className="chips">
-                    {categories.map((cat) => (
-                      <button
-                        key={cat}
-                        className={`chip ${category === cat ? 'active' : ''}`}
-                        onClick={() => setCategory(cat)}
-                      >
-                        {cat}
-                      </button>
-                    ))}
-                  </div>
+                  {menuType === 'satuan' && (
+                    <div className="pos-cat-strip">
+                      {categories.map((cat) => (
+                        <button
+                          key={cat}
+                          type="button"
+                          className={`pos-cat-pill ${category === cat ? 'active' : ''}`}
+                          onClick={() => setCategory(cat)}
+                        >
+                          {cat === 'Semua' ? 'Semua Kategori' : cat}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
+                {/* daftar kartu menu */}
                 {loading ? (
                   <div className="loading-state">
                     <div className="spinner"></div>
-                    <p>Memuat menu...</p>
+                    <p>Memuat katalog menu...</p>
+                  </div>
+                ) : filteredProducts.length === 0 ? (
+                  <div className="card card-pad">
+                    <div className="empty">
+                      <strong>Menu Tidak Ditemukan</strong>
+                      <p>
+                        Tidak ada {menuType === 'paketan' ? 'menu paketan' : 'menu satuan'} yang cocok dengan kata
+                        kunci "{search}".
+                      </p>
+                    </div>
                   </div>
                 ) : (
-                  <div className="product-grid">
+                  <div className="pos-menu-grid">
                     {filteredProducts.map((p) => {
-                      const [g1, g2] = p.gradient ? p.gradient.split(',') : ['#C08552', '#6F4E37'];
+                      const [g1, g2] = p.gradient ? p.gradient.split(',') : ['#D8B493', '#A67C58'];
+                      const qtyInCart = cart
+                        .filter((item) => item.id === p.id)
+                        .reduce((sum, item) => sum + item.qty, 0);
+                      const isAdded = justAddedId === p.id;
+                      const stockPct = Number(p.stock_percent ?? 100);
+                      const isLockedProduct = Boolean(p.is_locked || p.stock <= 3 || stockPct <= 5);
+                      const isWarningProduct =
+                        !isLockedProduct && Boolean(p.is_warning || p.stock <= 15 || stockPct <= 20);
+                      const remainingOrderable = getOrderableForProduct(p, 'M');
+                      const isButtonLocked = isLockedProduct || remainingOrderable <= 0;
+
                       return (
-                        <div
+                        <article
                           key={p.id}
-                          className={`product-card ${p.stock <= 0 ? 'sold-out' : ''}`}
-                          onClick={() => openProductModal(p)}
+                          className={`pos-card ${isLockedProduct ? 'is-locked' : ''} ${
+                            isWarningProduct ? 'is-warning' : ''
+                          } ${qtyInCart > 0 ? 'in-cart' : ''}`}
+                          onClick={() => {
+                            if (!isButtonLocked) openProductModal(p);
+                          }}
                         >
+                          {/* header kartu */}
                           <div
-                            className="product-visual"
+                            className="pos-card-stage"
                             style={{ background: `linear-gradient(135deg, ${g1}, ${g2})` }}
                           >
-                            <span className="product-emoji">{p.emoji || '☕'}</span>
-                            <span className={`product-stock ${p.stock <= 10 ? (p.stock <= 0 ? 'out' : 'low') : ''}`}>
-                              {p.stock <= 0 ? 'Habis' : `Stok: ${p.stock}`}
-                            </span>
+                            <div className="pos-stage-top">
+                              <span className="pos-stage-cat">
+                                {p.item_type === 'paketan' ? 'Bundling' : p.category}
+                              </span>
+                              <span
+                                className={`pos-stage-stock ${
+                                  isLockedProduct ? 'locked' : isWarningProduct ? 'warning' : 'safe'
+                                }`}
+                              >
+                                <i className="pos-stock-ind" />
+                                {isLockedProduct
+                                  ? `Terkunci • ${p.stock} (${stockPct}%)`
+                                  : `${p.stock} porsi • ${stockPct}%`}
+                              </span>
+                            </div>
+
+                            <div className="pos-stage-photo-wrap">
+                              <img
+                                src={getProductImage(p)}
+                                alt={p.name}
+                                className="pos-stage-photo"
+                                loading="lazy"
+                              />
+                            </div>
+
+                            {qtyInCart > 0 && (
+                              <span className="pos-stage-cart-pill">{qtyInCart}× di pesanan</span>
+                            )}
                           </div>
-                          <div className="product-info">
-                            <span className="product-cat">{p.category}</span>
-                            <span className="product-name">{p.name}</span>
-                            <span className="product-desc">{p.description}</span>
-                            <div className="product-foot">
-                              <div className="price">
-                                <small>Mulai</small>
-                                Rp {Number(p.price_m).toLocaleString('id-ID')}
+
+                          {/* isi kartu menu */}
+                          <div className="pos-card-body">
+                            <h3 className="pos-card-title">{p.name}</h3>
+                            <p className="pos-card-desc">{p.description}</p>
+
+                            {/* info paket atau resep */}
+                            {p.item_type === 'paketan' &&
+                            Array.isArray(p.bundle_items) &&
+                            p.bundle_items.length > 0 ? (
+                              <div className="pos-bundle-box">
+                                {p.bundle_items.map((bi, idx) => (
+                                  <span key={idx} className="pos-bundle-tag">
+                                    <strong>{bi.qty}×</strong> {bi.name}
+                                  </span>
+                                ))}
                               </div>
-                              <button className="add-btn" disabled={p.stock <= 0}>+</button>
+                            ) : (
+                              Array.isArray(p.recipe_summary) &&
+                              p.recipe_summary.length > 0 && (
+                                <div className="pos-recipe-line">
+                                  {p.recipe_summary.slice(0, 3).map((ing, idx) => (
+                                    <span key={idx}>
+                                      {ing.amount_m}
+                                      {ing.unit} {ing.name.replace(' Pasteurisasi', '').replace(' Organik', '')}
+                                    </span>
+                                  ))}
+                                </div>
+                              )
+                            )}
+
+                            {/* bar stok bahan */}
+                            <div className="pos-meter-wrap">
+                              <div className="pos-meter-labels">
+                                <span>
+                                  {p.limiting_reason
+                                    ? `Bahan: ${p.limiting_reason}`
+                                    : 'Stok bahan baku'}
+                                </span>
+                                <strong>{stockPct}%</strong>
+                              </div>
+                              <div className="pos-meter-track">
+                                <div
+                                  className={`pos-meter-fill ${
+                                    isLockedProduct ? 'locked' : isWarningProduct ? 'warning' : 'safe'
+                                  }`}
+                                  style={{ width: `${Math.min(100, Math.max(4, stockPct))}%` }}
+                                />
+                              </div>
+                            </div>
+
+                            {/* harga dan tombol tambah */}
+                            <div className="pos-card-foot">
+                              <div className="pos-price-block">
+                                <small>{p.item_type === 'paketan' ? 'Harga Paket' : 'Regular (M)'}</small>
+                                <strong>Rp {Number(p.price_m).toLocaleString('id-ID')}</strong>
+                              </div>
+
+                              <button
+                                type="button"
+                                className={`add-btn ${isAdded ? 'is-added' : ''} ${
+                                  isButtonLocked ? 'is-locked-btn' : ''
+                                }`}
+                                disabled={isButtonLocked}
+                                title={
+                                  isLockedProduct
+                                    ? `Terkunci otomatis (sisa ${p.stock} porsi / ${stockPct}%)`
+                                    : remainingOrderable <= 0
+                                    ? 'Mencapai batas kunci stok aman (sisa 3 porsi)'
+                                    : `Tambah ${p.name}`
+                                }
+                                aria-label={`Tambah ${p.name}`}
+                              >
+                                {isButtonLocked ? (
+                                  <IconLock size={15} />
+                                ) : isAdded ? (
+                                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <polyline points="20 6 9 17 4 12" />
+                                  </svg>
+                                ) : (
+                                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <line x1="12" y1="5" x2="12" y2="19" />
+                                    <line x1="5" y1="12" x2="19" y2="12" />
+                                  </svg>
+                                )}
+                              </button>
                             </div>
                           </div>
-                        </div>
+                        </article>
                       );
                     })}
                   </div>
                 )}
               </div>
 
-              {/* KERANJANG DI SISI KANAN */}
+              {/* keranjang pesanan */}
               <aside className="cart-panel">
                 <div className="cart-head">
-                  <h3>Pesanan Saat Ini</h3>
+                  <h3>Ringkasan Pesanan</h3>
                   <span className="cart-count">{cart.reduce((a, b) => a + b.qty, 0)} item</span>
                   {cart.length > 0 && (
-                    <button className="cart-clear" onClick={() => setCart([])}>Kosongkan</button>
+                    <button
+                      type="button"
+                      className="cart-clear"
+                      onClick={() => {
+                        setCart([]);
+                        setAppliedPromo(null);
+                        setPromoError('');
+                      }}
+                    >
+                      Bersihkan
+                    </button>
                   )}
                 </div>
 
                 <div className="cart-items">
                   {cart.length === 0 ? (
                     <div className="cart-empty">
-                      <span className="empty-icon">🛒</span>
-                      <strong>Keranjang Kosong</strong>
-                      <p>Pilih menu di sebelah kiri untuk menambahkan pesanan.</p>
+                      <span className="empty-icon">
+                        <IconBag size={28} />
+                      </span>
+                      <strong>Belum Ada Pesanan</strong>
+                      <p>Pilih menu Satuan atau Paketan di samping untuk mulai mencatat pesanan.</p>
                     </div>
                   ) : (
-                    cart.map((item) => (
-                      <div key={item.cartItemId} className="cart-item">
-                        <div className="ci-emoji">{item.emoji}</div>
-                        <div className="ci-info">
-                          <div className="ci-name">{item.name}</div>
-                          <div className="ci-meta">
-                            Size {item.size} • Gula {item.sugar} {item.note && `(${item.note})`}
+                    cart.map((item) => {
+                      const liveProd = liveProducts.find((p) => p.id === item.id);
+                      const canIncrement = liveProd ? getOrderableForProduct(liveProd, item.size) > 0 : false;
+
+                      return (
+                        <div key={item.cartItemId} className="cart-item">
+                          <div className="ci-emoji">
+                            <ProductIllustration
+                              category={item.item_type === 'paketan' ? 'Paketan' : item.category}
+                              size={18}
+                            />
                           </div>
-                          <div className="ci-bottom">
-                            <span className="ci-price">
-                              Rp {(item.unit_price * item.qty).toLocaleString('id-ID')}
-                            </span>
-                            <div className="qty-control" style={{ marginLeft: 'auto' }}>
-                              <button className="qty-btn" onClick={() => updateCartQty(item.cartItemId, -1)}>−</button>
-                              <span className="qty-value">{item.qty}</span>
-                              <button className="qty-btn" disabled={item.qty >= item.stock} onClick={() => updateCartQty(item.cartItemId, 1)}>+</button>
+                          <div className="ci-info">
+                            <div className="ci-name">
+                              {item.name}
+                              {item.item_type === 'paketan' && <span className="ci-type-badge">Paket</span>}
+                            </div>
+                            <div className="ci-meta">
+                              Ukuran {item.size} • Gula {item.sugar} {item.note && `• ${item.note}`}
+                            </div>
+                            <div className="ci-bottom">
+                              <span className="ci-price">
+                                Rp {(item.unit_price * item.qty).toLocaleString('id-ID')}
+                              </span>
+                              <div className="qty-control" style={{ marginLeft: 'auto' }}>
+                                <button
+                                  type="button"
+                                  className="qty-btn"
+                                  onClick={() => updateCartQty(item.cartItemId, -1)}
+                                >
+                                  −
+                                </button>
+                                <span className="qty-value">{item.qty}</span>
+                                <button
+                                  type="button"
+                                  className="qty-btn"
+                                  disabled={!canIncrement}
+                                  title={!canIncrement ? 'Mencapai batas stok terkunci' : 'Tambah jumlah'}
+                                  onClick={() => updateCartQty(item.cartItemId, 1)}
+                                >
+                                  +
+                                </button>
+                              </div>
                             </div>
                           </div>
                         </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
 
@@ -405,19 +1096,39 @@ export default function Kasir() {
                     <div className="promo-box">
                       {appliedPromo ? (
                         <div className="promo-applied">
-                          <span>🎁 {appliedPromo.code} (-Rp {discount.toLocaleString('id-ID')})</span>
-                          <button onClick={() => setAppliedPromo(null)}>Hapus</button>
+                          <span>
+                            Promo <strong>{appliedPromo.code}</strong> (-Rp {discount.toLocaleString('id-ID')})
+                          </span>
+                          <button type="button" onClick={() => setAppliedPromo(null)}>
+                            Hapus
+                          </button>
                         </div>
                       ) : (
-                        <div className="promo-row">
-                          <input
-                            type="text"
-                            placeholder="Kode Promo"
-                            value={promoCodeInput}
-                            onChange={(e) => setPromoCodeInput(e.target.value)}
-                          />
-                          <button className="btn btn-secondary btn-sm" onClick={handleApplyPromo}>Pakai</button>
-                        </div>
+                        <>
+                          <div className="promo-row">
+                            <input
+                              type="text"
+                              placeholder="Kode Promo"
+                              value={promoCodeInput}
+                              onChange={(e) => {
+                                setPromoCodeInput(e.target.value);
+                                setPromoError('');
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => handleApplyPromo()}
+                            >
+                              Terapkan
+                            </button>
+                          </div>
+                          {promoError && (
+                            <div className="promo-hint" style={{ color: 'var(--red)' }}>
+                              {promoError}
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
 
@@ -427,17 +1138,36 @@ export default function Kasir() {
                     </div>
                     {discount > 0 && (
                       <div className="summary-row discount">
-                        <span>Diskon</span>
+                        <span>Potongan Promo</span>
                         <span>-Rp {discount.toLocaleString('id-ID')}</span>
                       </div>
                     )}
+                    {tax > 0 && (
+                      <div className="summary-row">
+                        <span>Pajak ({taxPercent}%)</span>
+                        <span>Rp {tax.toLocaleString('id-ID')}</span>
+                      </div>
+                    )}
+                    {service > 0 && (
+                      <div className="summary-row">
+                        <span>Layanan ({servicePercent}%)</span>
+                        <span>Rp {service.toLocaleString('id-ID')}</span>
+                      </div>
+                    )}
                     <div className="summary-row total">
-                      <span>Total Bayar</span>
+                      <span>Total Tagihan</span>
                       <span>Rp {total.toLocaleString('id-ID')}</span>
                     </div>
 
-                    <button className="checkout-btn" onClick={() => setIsCheckoutOpen(true)}>
-                      Bayar Sekarang
+                    <button
+                      type="button"
+                      className="checkout-btn"
+                      onClick={() => {
+                        setCheckoutError('');
+                        setIsCheckoutOpen(true);
+                      }}
+                    >
+                      <span>Lanjut Pembayaran</span>
                       <span className="btn-cart-total">Rp {total.toLocaleString('id-ID')}</span>
                     </button>
                   </div>
@@ -446,46 +1176,214 @@ export default function Kasir() {
             </div>
           )}
 
-          {/* TAB 2: RIWAYAT TRANSAKSI */}
+          {/* riwayat transaksi */}
           {activeTab === 'history' && (
             <div>
               <div className="section-head">
                 <div>
                   <h2>Riwayat Transaksi</h2>
-                  <p>Semua pesanan yang telah diproses di kasir.</p>
+                  <p>Cari pesanan berdasarkan nomor struk, nama menu yang dipesan, atau metode pembayaran.</p>
                 </div>
               </div>
 
-              {orders.length === 0 ? (
+              <div className="filter-bar">
+                <div className="search-box">
+                  <IconSearch size={16} />
+                  <input
+                    type="text"
+                    placeholder="Cari kode KS-..., nama menu, atau kasir..."
+                    value={historySearch}
+                    onChange={(e) => setHistorySearch(e.target.value)}
+                  />
+                  {historySearch && (
+                    <button type="button" className="search-clear" onClick={() => setHistorySearch('')}>
+                      ✕
+                    </button>
+                  )}
+                </div>
+                <div className="chips">
+                  {[
+                    { id: 'all', label: 'Semua Metode' },
+                    { id: 'cash', label: 'Tunai (Cash)' },
+                    { id: 'qris', label: 'QRIS' },
+                  ].map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      className={`chip ${historyMethod === m.id ? 'active' : ''}`}
+                      onClick={() => setHistoryMethod(m.id)}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="filter-summary">
+                  Menampilkan <strong>{filteredOrders.length}</strong> dari {orders.length} transaksi
+                </div>
+              </div>
+
+              {filteredOrders.length === 0 ? (
                 <div className="card card-pad">
                   <div className="empty">
-                    <div className="empty-icon">🧾</div>
-                    <strong>Belum Ada Transaksi</strong>
-                    <p>Pesanan yang selesai akan otomatis tercatat di sini.</p>
+                    <div className="empty-icon">
+                      <IconReceipt size={30} />
+                    </div>
+                    <strong>Transaksi Tidak Ditemukan</strong>
+                    <p>Tidak ada riwayat pesanan yang sesuai dengan pencarian Anda.</p>
                   </div>
                 </div>
               ) : (
                 <div className="order-list">
-                  {orders.map((o) => (
-                    <div key={o.id} className="order-card">
-                      <div className="order-card-head">
-                        <span className="order-code">{o.code}</span>
-                        <span className="order-time">{new Date(o.created_at).toLocaleString('id-ID')}</span>
-                        <span className={`method-chip ${o.payment_method === 'cash' ? 'method-cash' : 'method-qris'}`}>
-                          {o.payment_method?.toUpperCase()}
-                        </span>
-                        <div className="order-total" style={{ marginLeft: 'auto' }}>
-                          Rp {Number(o.total).toLocaleString('id-ID')}
+                  {filteredOrders.map((o) => {
+                    const orderItems = parseOrderItems(o.items);
+                    return (
+                      <div key={o.id} className="order-card">
+                        <div className="order-card-head">
+                          <span className="order-code">{o.code}</span>
+                          <span className="order-time">{new Date(o.created_at).toLocaleString('id-ID')}</span>
+                          <span className={`method-chip ${o.payment_method === 'cash' ? 'method-cash' : 'method-qris'}`}>
+                            {o.payment_method?.toUpperCase()}
+                          </span>
+                          <div className="order-total" style={{ marginLeft: 'auto' }}>
+                            Rp {Number(o.total).toLocaleString('id-ID')}
+                          </div>
+                        </div>
+                        {orderItems.length > 0 && (
+                          <div className="order-card-body">
+                            <div className="order-items-preview">
+                              {orderItems.map((it, idx) => (
+                                <span key={idx} className="order-item-pill">
+                                  {it.name} <span>×{it.qty}</span>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        <div className="order-card-foot">
+                          <span className="order-cashier">Kasir: {o.cashier_name}</span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ marginLeft: 'auto' }}
+                            onClick={() => setSelectedReceipt(o)}
+                          >
+                            <IconPrinter size={15} />
+                            <span>Lihat Struk</span>
+                          </button>
                         </div>
                       </div>
-                      <div className="order-card-foot">
-                        <span className="order-cashier">Kasir: {o.cashier_name}</span>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* promo toko */}
+          {activeTab === 'promos' && (
+            <div>
+              <div className="section-head">
+                <div>
+                  <h2>Daftar & Pengelolaan Promo Toko</h2>
+                  <p>Tambahkan kode voucher baru, atur diskon persen atau potongan harga, dan terapkan ke pesanan.</p>
+                </div>
+                <div className="head-action">
+                  <button type="button" className="btn btn-primary" onClick={openAddPromoModal}>
+                    + Tambah Promo Toko
+                  </button>
+                </div>
+              </div>
+
+              <div className="filter-bar">
+                <div className="search-box">
+                  <IconSearch size={16} />
+                  <input
+                    type="text"
+                    placeholder="Cari kode promo (misal: NGOPI15, HEMAT10K)..."
+                    value={promoSearch}
+                    onChange={(e) => setPromoSearch(e.target.value)}
+                  />
+                  {promoSearch && (
+                    <button type="button" className="search-clear" onClick={() => setPromoSearch('')}>
+                      ✕
+                    </button>
+                  )}
+                </div>
+                <div className="chips">
+                  {[
+                    { id: 'all', label: 'Semua Promo' },
+                    { id: 'percent', label: 'Diskon Persen (%)' },
+                    { id: 'fixed', label: 'Potongan Harga (Rp)' },
+                  ].map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className={`chip ${promoFilterType === t.id ? 'active' : ''}`}
+                      onClick={() => setPromoFilterType(t.id)}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {filteredPromos.length === 0 ? (
+                <div className="card card-pad">
+                  <div className="empty">
+                    <strong>Promo Tidak Ditemukan</strong>
+                    <p>Belum ada promo yang sesuai pencarian. Klik "+ Tambah Promo Toko" untuk membuat promo baru.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="promo-grid">
+                  {filteredPromos.map((p) => (
+                    <div key={p.id} className={`promo-card ${!p.active ? 'promo-inactive' : ''}`}>
+                      <span className={`promo-stamp ${!p.active ? 'off' : ''}`}>
+                        {p.active ? 'Aktif' : 'Nonaktif'}
+                      </span>
+                      <span className="promo-code">{p.code}</span>
+                      <div className="promo-value">
+                        {p.type === 'percent' ? `${p.value}%` : `Rp ${Number(p.value).toLocaleString('id-ID')}`}
+                        <small>{p.type === 'percent' ? ' diskon' : ' potongan'}</small>
+                      </div>
+                      <div className="promo-meta">
+                        Minimum belanja Rp {Number(p.min_subtotal).toLocaleString('id-ID')}
+                        {Number(p.max_discount) > 0 &&
+                          ` • Maks. potongan Rp ${Number(p.max_discount).toLocaleString('id-ID')}`}
+                      </div>
+                      <div className="promo-card-actions">
+                        {p.active && cart.length > 0 && (
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            onClick={() => {
+                              handleApplyPromo(p.code);
+                              setActiveTab('menu');
+                            }}
+                          >
+                            Pakai Promo
+                          </button>
+                        )}
                         <button
+                          type="button"
                           className="btn btn-secondary btn-sm"
-                          style={{ marginLeft: 'auto' }}
-                          onClick={() => setSelectedReceipt(o)}
+                          onClick={() => openEditPromoModal(p)}
                         >
-                          Cetak Struk
+                          Ubah
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-soft btn-sm"
+                          onClick={() => handleTogglePromoActive(p)}
+                        >
+                          {p.active ? 'Nonaktifkan' : 'Aktifkan'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-sm"
+                          onClick={() => handleDeletePromo(p)}
+                        >
+                          Hapus
                         </button>
                       </div>
                     </div>
@@ -495,91 +1393,337 @@ export default function Kasir() {
             </div>
           )}
 
-          {/* TAB 3: PROMO */}
-          {activeTab === 'promos' && (
+          {/* panduan resep */}
+          {activeTab === 'recipes' && (
             <div>
               <div className="section-head">
                 <div>
-                  <h2>Daftar Promo Tersedia</h2>
-                  <p>Gunakan kode promo ini saat checkout pesanan kasir.</p>
+                  <h2>Resep & Takaran</h2>
+                  <p>Stok bahan baku</p>
                 </div>
               </div>
-              <div className="promo-grid">
-                {promos.map((p) => (
-                  <div key={p.id} className="promo-card">
-                    <span className="promo-stamp">Aktif</span>
-                    <span className="promo-code">🎁 {p.code}</span>
-                    <div className="promo-value">
-                      {p.type === 'percent' ? `${p.value}%` : `Rp ${Number(p.value).toLocaleString('id-ID')}`}
-                      <small>{p.type === 'percent' ? ' diskon' : ' potongan'}</small>
-                    </div>
-                    <div className="promo-meta">
-                      Min. belanja Rp {Number(p.min_subtotal).toLocaleString('id-ID')}
-                    </div>
-                  </div>
-                ))}
+
+              <div className="filter-bar">
+                <div className="search-box">
+                  <IconSearch size={16} />
+                  <input
+                    type="text"
+                    placeholder="Cari nama menu atau bahan (misal: espresso, susu, gula aren)..."
+                    value={recipeSearch}
+                    onChange={(e) => setRecipeSearch(e.target.value)}
+                  />
+                  {recipeSearch && (
+                    <button type="button" className="search-clear" onClick={() => setRecipeSearch('')}>
+                      ✕
+                    </button>
+                  )}
+                </div>
+                <div className="chips">
+                  {categories.map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      className={`chip ${recipeCategory === cat ? 'active' : ''}`}
+                      onClick={() => setRecipeCategory(cat)}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              {filteredRecipeProducts.length === 0 ? (
+                <div className="card card-pad">
+                  <div className="empty">
+                    <strong>Resep Tidak Ditemukan</strong>
+                    <p>Tidak ada panduan resep yang cocok dengan pencarian Anda.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="recipe-grid">
+                  {filteredRecipeProducts.map((prod) => {
+                    const recipe = recipes.find((r) => Number(r.product_id) === Number(prod.id));
+                    if (!recipe) return null;
+                    return (
+                      <div key={prod.id} className="card recipe-card">
+                        <div className="recipe-card-head">
+                          <div
+                            className="thumb thumb-photo"
+                            style={{
+                              background: `linear-gradient(135deg, ${prod.gradient || '#D8B493,#A67C58'})`,
+                            }}
+                          >
+                            <img src={getProductImage(prod)} alt={prod.name} className="thumb-img" loading="lazy" />
+                          </div>
+                          <div className="recipe-head-info">
+                            <span className="product-cat">{prod.category}</span>
+                            <h3>{prod.name}</h3>
+                          </div>
+                          <span className="recipe-time-pill">{recipe.prep_time}</span>
+                        </div>
+                        <div className="recipe-card-body">
+                          <div className="recipe-ing-table-wrap">
+                            <table className="recipe-ing-table">
+                              <thead>
+                                <tr>
+                                  <th>Bahan Baku</th>
+                                  <th>Regular (M)</th>
+                                  <th>Large (L)</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {recipe.ingredients.map((ing, i) => (
+                                  <tr key={i}>
+                                    <td>{ing.name}</td>
+                                    <td>
+                                      <strong>{ing.amount_m}</strong> {ing.unit}
+                                    </td>
+                                    <td>
+                                      <strong>{ing.amount_l}</strong> {ing.unit}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          {recipe.steps && (
+                            <div className="recipe-steps-box">
+                              <span className="recipe-box-label">Langkah Penyajian</span>
+                              <p>{recipe.steps}</p>
+                            </div>
+                          )}
+                          {recipe.barista_note && (
+                            <div className="recipe-note-box">
+                              <strong>Catatan Barista:</strong> {recipe.barista_note}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
       </main>
 
-      {/* MODAL VARIAN MENU */}
-      {selectedProduct && (
+      {/* modal promo */}
+      {isPromoModalOpen && (
+        <div className="modal-backdrop" onClick={() => setIsPromoModalOpen(false)}>
+          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <div>
+                <h3>{editingPromoId ? 'Ubah Promo Toko' : 'Tambah Promo Toko Baru'}</h3>
+                <p>Atur kode voucher, tipe potongan harga, dan syarat minimum belanja</p>
+              </div>
+              <button type="button" className="modal-close" onClick={() => setIsPromoModalOpen(false)}>
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleSavePromo}>
+              <div className="modal-body">
+                <div className="form-grid">
+                  <label className="field">
+                    <span className="field-label">Kode Promo</span>
+                    <input
+                      type="text"
+                      required
+                      maxLength={32}
+                      className="input"
+                      placeholder="Contoh: KOPIHEMAT20"
+                      value={promoFormCode}
+                      onChange={(e) => setPromoFormCode(e.target.value.toUpperCase())}
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span className="field-label">Tipe Potongan</span>
+                    <select
+                      className="select"
+                      value={promoFormType}
+                      onChange={(e) => setPromoFormType(e.target.value)}
+                    >
+                      <option value="percent">Diskon Persentase (%)</option>
+                      <option value="fixed">Potongan Nominal Tetap (Rp)</option>
+                    </select>
+                  </label>
+
+                  <label className="field">
+                    <span className="field-label">
+                      {promoFormType === 'percent' ? 'Besar Diskon (%)' : 'Nominal Potongan (Rp)'}
+                    </span>
+                    <input
+                      type="number"
+                      min="1"
+                      max={promoFormType === 'percent' ? '100' : '10000000'}
+                      required
+                      className="input"
+                      value={promoFormValue}
+                      onChange={(e) => setPromoFormValue(e.target.value)}
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span className="field-label">Minimum Belanja (Rp)</span>
+                    <input
+                      type="number"
+                      min="0"
+                      required
+                      className="input"
+                      value={promoFormMinSubtotal}
+                      onChange={(e) => setPromoFormMinSubtotal(e.target.value)}
+                    />
+                  </label>
+
+                  {promoFormType === 'percent' && (
+                    <label className="field span-2">
+                      <span className="field-label">Maksimum Potongan Rp (Isi 0 jika tanpa batas)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        className="input"
+                        value={promoFormMaxDiscount}
+                        onChange={(e) => setPromoFormMaxDiscount(e.target.value)}
+                      />
+                    </label>
+                  )}
+
+                  <label className="field span-2" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <input
+                      type="checkbox"
+                      checked={promoFormActive}
+                      onChange={(e) => setPromoFormActive(e.target.checked)}
+                      style={{ width: '16px', height: '16px', accentColor: 'var(--coffee-700)' }}
+                    />
+                    <span className="field-label" style={{ margin: 0 }}>
+                      Aktifkan promo ini agar langsung bisa digunakan di kasir
+                    </span>
+                  </label>
+                </div>
+              </div>
+              <div className="modal-actions">
+                <button type="button" className="btn btn-secondary" onClick={() => setIsPromoModalOpen(false)}>
+                  Batal
+                </button>
+                <button type="submit" disabled={savingPromo} className="btn btn-primary">
+                  {savingPromo ? 'Menyimpan...' : 'Simpan Promo'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* modal varian menu */}
+      {selectedLiveProduct && (
         <div className="modal-backdrop" onClick={() => setSelectedProduct(null)}>
           <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <h3>Kustomisasi Menu</h3>
-              <button className="modal-close" onClick={() => setSelectedProduct(null)}>✕</button>
+              <div>
+                <h3>Detail Pesanan {selectedLiveProduct.item_type === 'paketan' ? 'Paketan' : 'Menu'}</h3>
+                <p>Sesuaikan ukuran, tingkat kemanisan, dan catatan khusus</p>
+              </div>
+              <button type="button" className="modal-close" onClick={() => setSelectedProduct(null)}>
+                ✕
+              </button>
             </div>
             <div className="modal-body">
               <div className="pm-hero">
                 <div
-                  className="pm-visual"
+                  className="pm-visual pm-visual-photo"
                   style={{
                     background: `linear-gradient(135deg, ${
-                      selectedProduct.gradient ? selectedProduct.gradient.split(',')[0] : '#C08552'
-                    }, ${selectedProduct.gradient ? selectedProduct.gradient.split(',')[1] : '#6F4E37'})`
+                      selectedLiveProduct.gradient ? selectedLiveProduct.gradient.split(',')[0] : '#D8B493'
+                    }, ${selectedLiveProduct.gradient ? selectedLiveProduct.gradient.split(',')[1] : '#A67C58'})`,
                   }}
                 >
-                  {selectedProduct.emoji || '☕'}
+                  <img
+                    src={getProductImage(selectedLiveProduct)}
+                    alt={selectedLiveProduct.name}
+                    className="pm-photo-img"
+                  />
                 </div>
                 <div>
-                  <h4 className="pm-title">{selectedProduct.name}</h4>
-                  <p className="pm-desc">{selectedProduct.description}</p>
+                  <h4 className="pm-title">{selectedLiveProduct.name}</h4>
+                  <p className="pm-desc">{selectedLiveProduct.description}</p>
+                  <div className="pm-stock-info">
+                    Stok efektif saat ini: <strong>{selectedLiveProduct.stock} porsi ({selectedLiveProduct.stock_percent ?? 100}%)</strong> •
+                    Dapat dipesan maks. <strong>{selectedProductMaxAdd} porsi</strong> lagi
+                  </div>
                 </div>
               </div>
 
+              {selectedLiveProduct.item_type === 'paketan' &&
+                Array.isArray(selectedLiveProduct.bundle_items) &&
+                selectedLiveProduct.bundle_items.length > 0 && (
+                  <div className="option-group">
+                    <div className="option-label">Komponen Isi Paketan</div>
+                    <div className="order-items-preview">
+                      {selectedLiveProduct.bundle_items.map((bi, idx) => (
+                        <span key={idx} className="order-item-pill">
+                          <strong>{bi.qty}×</strong> {bi.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
               <div className="option-group">
-                <div className="option-label">Pilih Ukuran</div>
+                <div className="option-label">Ukuran Cup / Porsi</div>
                 <div className="size-grid">
                   <button
                     type="button"
                     className={`size-option ${selectedSize === 'M' ? 'active' : ''}`}
-                    onClick={() => setSelectedSize('M')}
+                    onClick={() => {
+                      setSelectedSize('M');
+                      setProductQty(1);
+                    }}
                   >
                     <span className="size-letter">M</span>
                     <span className="size-text">
-                      <strong>Medium</strong>
-                      <small>Rp {Number(selectedProduct.price_m).toLocaleString('id-ID')}</small>
+                      <strong>Regular (M)</strong>
+                      <small>Rp {Number(selectedLiveProduct.price_m).toLocaleString('id-ID')}</small>
                     </span>
                   </button>
                   <button
                     type="button"
                     className={`size-option ${selectedSize === 'L' ? 'active' : ''}`}
-                    onClick={() => setSelectedSize('L')}
+                    onClick={() => {
+                      setSelectedSize('L');
+                      setProductQty(1);
+                    }}
                   >
                     <span className="size-letter">L</span>
                     <span className="size-text">
-                      <strong>Large</strong>
-                      <small>Rp {Number(selectedProduct.price_l).toLocaleString('id-ID')}</small>
+                      <strong>Large (L)</strong>
+                      <small>Rp {Number(selectedLiveProduct.price_l).toLocaleString('id-ID')}</small>
                     </span>
                   </button>
                 </div>
               </div>
 
+              {selectedProductRecipe && (
+                <div className="option-group">
+                  <div className="option-label">
+                    Pemakaian Bahan Baku Gudang ({selectedSize === 'M' ? 'Regular M' : 'Large L'} × {productQty})
+                  </div>
+                  <div className="order-items-preview">
+                    {selectedProductRecipe.ingredients.map((ing, i) => (
+                      <span key={i} className="order-item-pill">
+                        {ing.name}:{' '}
+                        <strong>
+                          {(Number(selectedSize === 'M' ? ing.amount_m : ing.amount_l) || 0) * productQty}{' '}
+                          {ing.unit}
+                        </strong>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="option-group">
-                <div className="option-label">Level Gula</div>
+                <div className="option-label">Takaran Gula</div>
                 <div className="sugar-grid">
                   {SUGAR_LEVELS.map((sug) => (
                     <button
@@ -599,20 +1743,29 @@ export default function Kasir() {
                 <div>
                   <div className="option-label">Jumlah</div>
                   <div className="qty-large">
-                    <button type="button" disabled={productQty <= 1} onClick={() => setProductQty((q) => q - 1)}>
+                    <button
+                      type="button"
+                      disabled={productQty <= 1}
+                      onClick={() => setProductQty((q) => q - 1)}
+                    >
                       −
                     </button>
                     <span>{productQty}</span>
-                    <button type="button" disabled={productQty >= selectedProduct.stock} onClick={() => setProductQty((q) => q + 1)}>
+                    <button
+                      type="button"
+                      disabled={productQty >= selectedProductMaxAdd}
+                      onClick={() => setProductQty((q) => q + 1)}
+                    >
                       +
                     </button>
                   </div>
                 </div>
                 <div className="note-field">
-                  <div className="option-label">Catatan Tambahan</div>
+                  <div className="option-label">Catatan Pesanan</div>
                   <input
                     type="text"
-                    placeholder="Contoh: Less ice, jangan terlalu manis"
+                    maxLength={120}
+                    placeholder="Contoh: Less ice, pisah es"
                     value={productNote}
                     onChange={(e) => setProductNote(e.target.value)}
                   />
@@ -620,32 +1773,54 @@ export default function Kasir() {
               </div>
             </div>
             <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => setSelectedProduct(null)}>Batal</button>
-              <button className="btn btn-primary" onClick={addToCartFromModal}>Tambahkan ke Pesanan</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setSelectedProduct(null)}>
+                Batal
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={selectedProductMaxAdd <= 0}
+                onClick={addToCartFromModal}
+              >
+                Tambah ke Pesanan
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL CHECKOUT PEMBAYARAN */}
+      {/* modal pembayaran */}
       {isCheckoutOpen && (
         <div className="modal-backdrop" onClick={() => setIsCheckoutOpen(false)}>
           <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <h3>Pembayaran</h3>
-              <button className="modal-close" onClick={() => setIsCheckoutOpen(false)}>✕</button>
+              <div>
+                <h3>Penyelesaian Pembayaran</h3>
+                <p>Pilih metode pembayaran dan konfirmasi transaksi</p>
+              </div>
+              <button type="button" className="modal-close" onClick={() => setIsCheckoutOpen(false)}>
+                ✕
+              </button>
             </div>
             <div className="modal-body">
+              {checkoutError && (
+                <div className="login-error show" style={{ marginBottom: '16px' }}>
+                  {checkoutError}
+                </div>
+              )}
+
               <div className="pay-methods">
                 <button
                   type="button"
                   className={`pay-method ${paymentMethod === 'cash' ? 'active' : ''}`}
                   onClick={() => setPaymentMethod('cash')}
                 >
-                  <span className="pay-icon">💵</span>
+                  <span className="pay-icon">
+                    <IconWallet size={18} />
+                  </span>
                   <div>
                     <span className="pay-name">Tunai (Cash)</span>
-                    <span className="pay-desc">Bayar langsung di kasir</span>
+                    <span className="pay-desc">Pembayaran uang tunai di kasir</span>
                   </div>
                 </button>
                 <button
@@ -653,27 +1828,30 @@ export default function Kasir() {
                   className={`pay-method ${paymentMethod === 'qris' ? 'active' : ''}`}
                   onClick={() => setPaymentMethod('qris')}
                 >
-                  <span className="pay-icon">📱</span>
+                  <span className="pay-icon">
+                    <IconQr size={18} />
+                  </span>
                   <div>
                     <span className="pay-name">QRIS</span>
-                    <span className="pay-desc">Scan barcode semua e-wallet</span>
+                    <span className="pay-desc">Scan kode QR dompet digital / m-banking</span>
                   </div>
                 </button>
               </div>
 
               {paymentMethod === 'cash' ? (
                 <div className="cash-section">
-                  <div className="option-label">Uang Diterima (Rp)</div>
+                  <div className="option-label">Nominal Uang Diterima (Rp)</div>
                   <input
                     type="number"
+                    min="0"
                     className="input"
-                    placeholder="Masukkan nominal uang"
+                    placeholder="Masukkan nominal uang pelanggan"
                     value={cashReceived}
                     onChange={(e) => setCashReceived(e.target.value)}
                   />
                   <div className="quick-cash">
-                    {[total, 50000, 100000].map((amt) => (
-                      <button key={amt} type="button" onClick={() => setCashReceived(String(amt))}>
+                    {[total, 50000, 100000].map((amt, i) => (
+                      <button key={i} type="button" onClick={() => setCashReceived(String(amt))}>
                         {amt === total ? 'Uang Pas' : `Rp ${amt.toLocaleString('id-ID')}`}
                       </button>
                     ))}
@@ -681,7 +1859,7 @@ export default function Kasir() {
 
                   {Number(cashReceived) >= total && (
                     <div className="change-box">
-                      <span>Kembalian:</span>
+                      <span>Uang Kembalian</span>
                       <strong>Rp {(Number(cashReceived) - total).toLocaleString('id-ID')}</strong>
                     </div>
                   )}
@@ -694,31 +1872,38 @@ export default function Kasir() {
                     src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=VERSIKOPI_PAYMENT"
                     alt="QRIS"
                   />
-                  <span className="qris-sub">Arahkan kamera aplikasi e-wallet pelanggan ke QR code</span>
+                  <span className="qris-sub">Silakan arahkan pemindai QR pelanggan ke kode di atas</span>
                 </div>
               )}
             </div>
             <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => setIsCheckoutOpen(false)}>Batal</button>
+              <button type="button" className="btn btn-secondary" onClick={() => setIsCheckoutOpen(false)}>
+                Batal
+              </button>
               <button
+                type="button"
                 className="btn btn-primary"
                 disabled={isSubmitting || (paymentMethod === 'cash' && Number(cashReceived) < total)}
                 onClick={handleProcessOrder}
               >
-                {isSubmitting ? 'Memproses...' : 'Selesaikan Pembayaran'}
+                {isSubmitting ? 'Memproses...' : 'Konfirmasi Pembayaran'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* STRUK PRINT MODAL */}
-      {(successOrder || selectedReceipt) && (
+      {/* modal struk */}
+      {activeReceipt && (
         <div className="modal-backdrop">
           <div className="modal-sheet modal-sm">
             <div className="modal-head no-print">
-              <h3>Struk Transaksi</h3>
+              <div>
+                <h3>Struk Transaksi</h3>
+                <p>Bukti pembayaran resmi pelanggan</p>
+              </div>
               <button
+                type="button"
                 className="modal-close"
                 onClick={() => {
                   setSuccessOrder(null);
@@ -735,28 +1920,95 @@ export default function Kasir() {
                   <h4>{settings.store_name || 'VERSI KOPI'}</h4>
                   <div className="rc-sub">{settings.tagline}</div>
                   <div className="rc-sub">{settings.address}</div>
+                  {settings.phone && <div className="rc-sub">Telp: {settings.phone}</div>}
                 </div>
                 <div className="dashed"></div>
                 <div className="receipt-row">
-                  <span>No. Pesanan:</span>
-                  <span className="r">{(successOrder || selectedReceipt).code}</span>
+                  <span>No. Pesanan</span>
+                  <span className="r">{activeReceipt.code}</span>
                 </div>
                 <div className="receipt-row">
-                  <span>Metode:</span>
-                  <span className="r">{(successOrder || selectedReceipt).payment_method?.toUpperCase()}</span>
+                  <span>Waktu</span>
+                  <span className="r">
+                    {activeReceipt.created_at
+                      ? new Date(activeReceipt.created_at).toLocaleString('id-ID')
+                      : '-'}
+                  </span>
                 </div>
+                <div className="receipt-row">
+                  <span>Kasir</span>
+                  <span className="r">{activeReceipt.cashier_name || user?.name || 'Kasir'}</span>
+                </div>
+                <div className="receipt-row">
+                  <span>Metode</span>
+                  <span className="r">{activeReceipt.payment_method?.toUpperCase()}</span>
+                </div>
+
+                {activeReceiptItems.length > 0 && (
+                  <>
+                    <div className="dashed"></div>
+                    {activeReceiptItems.map((it, idx) => (
+                      <div key={idx} className="receipt-item">
+                        <div className="receipt-row">
+                          <span className="receipt-item-name">
+                            {it.name} ({it.size || 'M'}) ×{it.qty}
+                          </span>
+                          <span className="r">
+                            Rp {(Number(it.unit_price || 0) * Number(it.qty || 1)).toLocaleString('id-ID')}
+                          </span>
+                        </div>
+                        {(it.sugar || it.note) && (
+                          <div className="receipt-item-meta">
+                            Gula {it.sugar || '100%'} {it.note ? `• ${it.note}` : ''}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </>
+                )}
+
                 <div className="dashed"></div>
+                {Number(activeReceipt.discount) > 0 && (
+                  <div className="receipt-row">
+                    <span>Diskon</span>
+                    <span className="r">-Rp {Number(activeReceipt.discount).toLocaleString('id-ID')}</span>
+                  </div>
+                )}
+                {Number(activeReceipt.tax) > 0 && (
+                  <div className="receipt-row">
+                    <span>Pajak</span>
+                    <span className="r">Rp {Number(activeReceipt.tax).toLocaleString('id-ID')}</span>
+                  </div>
+                )}
                 <div className="receipt-row receipt-total">
                   <span>TOTAL</span>
-                  <span className="r">Rp {Number((successOrder || selectedReceipt).total).toLocaleString('id-ID')}</span>
+                  <span className="r">Rp {Number(activeReceipt.total).toLocaleString('id-ID')}</span>
                 </div>
+                {activeReceipt.payment_method === 'cash' && Number(activeReceipt.cash_received) > 0 && (
+                  <>
+                    <div className="receipt-row">
+                      <span>Tunai</span>
+                      <span className="r">Rp {Number(activeReceipt.cash_received).toLocaleString('id-ID')}</span>
+                    </div>
+                    <div className="receipt-row">
+                      <span>Kembali</span>
+                      <span className="r">Rp {Number(activeReceipt.change_amount || 0).toLocaleString('id-ID')}</span>
+                    </div>
+                  </>
+                )}
                 <div className="dashed"></div>
-                <div className="receipt-foot">{settings.receipt_footer || 'Terima kasih sudah berkunjung! ☕'}</div>
+                <div className="receipt-foot">
+                  {settings.receipt_footer || 'Terima kasih telah berkunjung ke Versi Kopi'}
+                </div>
               </div>
             </div>
             <div className="modal-actions no-print">
-              <button className="btn btn-primary" onClick={() => window.print()}>🖨️ Cetak Struk</button>
+              <button type="button" className="btn btn-primary" onClick={() => window.print()}>
+                <IconPrinter size={16} />
+                <span>Cetak Struk</span>
+              </button>
               <button
+                type="button"
                 className="btn btn-secondary"
                 onClick={() => {
                   setSuccessOrder(null);

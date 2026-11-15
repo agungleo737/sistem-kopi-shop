@@ -1,14 +1,56 @@
 import axios from 'axios'
 
+// sanitasi input
+const sanitizeValue = (val) => {
+  if (typeof val === 'string') {
+    return val.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').replace(/<\/?[^>]+(>|$)/g, '').trim()
+  }
+  if (Array.isArray(val)) {
+    return val.map(sanitizeValue)
+  }
+  if (val && typeof val === 'object') {
+    const cleaned = {}
+    for (const key of Object.keys(val)) {
+      cleaned[key] = sanitizeValue(val[key])
+    }
+    return cleaned
+  }
+  return val
+}
+
+// konfigurasi api
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api',
-  headers: { Accept: 'application/json' },
+  baseURL: import.meta.env.VITE_API_URL || '/api',
+  headers: {
+    Accept: 'application/json',
+  },
 })
 
+// sisipkan token auth
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
-  if (token) config.headers.Authorization = `Bearer ${token}`
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  if (config.data && typeof config.data === 'object') {
+    config.data = sanitizeValue(config.data)
+  }
   return config
 })
+
+// cek sesi berakhir
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401 && !error.config?.url?.includes('/login')) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+    }
+    return Promise.reject(error)
+  }
+)
 
 export default api
