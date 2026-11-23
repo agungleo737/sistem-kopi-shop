@@ -13,9 +13,12 @@ class SecurityHeadersMiddleware
         if ($request->isMethod('OPTIONS')) {
             $response = response('', 204);
         } else {
-            // sanitasi input xss
+            // sanitasi input xss kecuali password
             $input = $request->all();
-            array_walk_recursive($input, function (&$value) {
+            array_walk_recursive($input, function (&$value, $key) {
+                if (in_array($key, ['password', 'password_confirmation', 'current_password'], true)) {
+                    return;
+                }
                 if (is_string($value)) {
                     $value = str_replace("\0", '', $value);
                     $value = trim(strip_tags($value));

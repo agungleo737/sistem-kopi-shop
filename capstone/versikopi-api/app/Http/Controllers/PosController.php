@@ -3,7 +3,10 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
@@ -120,7 +123,23 @@ class PosController extends Controller
                 $table->string('payment_method')->default('cash');
                 $table->integer('cash_received')->default(0);
                 $table->integer('change_amount')->default(0);
+                $table->string('status')->default('paid');
                 $table->timestamps();
+            });
+        } else {
+            Schema::table('orders', function (Blueprint $table) {
+                if (! Schema::hasColumn('orders', 'customer_name')) {
+                    $table->string('customer_name')->nullable()->after('cashier_name');
+                }
+                if (! Schema::hasColumn('orders', 'order_type')) {
+                    $table->string('order_type')->default('dine_in')->after('customer_name');
+                }
+                if (! Schema::hasColumn('orders', 'table_number')) {
+                    $table->string('table_number')->nullable()->after('order_type');
+                }
+                if (! Schema::hasColumn('orders', 'status')) {
+                    $table->string('status')->default('paid')->after('change_amount');
+                }
             });
         }
 
@@ -877,7 +896,7 @@ class PosController extends Controller
             $isLocked = ($effectiveStock <= 3) || ($stockPercent <= 5);
 
             // batas peringatan stok
-            $isWarning = ! $isLocked && (($effectiveStock <= 15) || ($stockPercent <= 20));
+            $isWarning = ! $isLocked && $stockPercent <= 20;
 
             $prodObj = (array) $prod;
             $prodObj['item_type'] = $itemType;
@@ -895,28 +914,58 @@ class PosController extends Controller
         })->values();
     }
 
-    public function getSettings()
+    private function logoVersion(): ?string
     {
-        $this->ensureExtendedSchema();
-        $settings = DB::table('settings')->pluck('value', 'key');
-        return response()->json($settings);
+        return DB::table('store_logos')->where('id', 1)->value('version');
     }
 
-    public function updateSettings(Request $request)
+    public function getBranding(): JsonResponse
+    {
+        $branding = DB::table('settings')->whereIn('key', ['store_name', 'tagline'])->pluck('value', 'key');
+
+        return response()->json([
+            'store_name' => $branding['store_name'] ?? null,
+            'tagline' => $branding['tagline'] ?? null,
+            'logo_version' => $this->logoVersion(),
+        ]);
+    }
+
+    public function getStoreLogo(): Response
+    {
+        $logo = DB::table('store_logos')->where('id', 1)->first();
+        abort_if($logo === null, 404);
+
+        return response(base64_decode($logo->encoded_image, true), 200, [
+            'Content-Type' => $logo->mime,
+            'Cache-Control' => 'no-cache',
+        ]);
+    }
+
+    public function getSettings(): JsonResponse
+    {
+        return response()->json(DB::table('settings')->pluck('value', 'key')->put('logo_version', $this->logoVersion()));
+    }
+
+    public function updateSettings(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'store_name'      => ['required', 'string', 'max:100'],
-            'tagline'         => ['nullable', 'string', 'max:160'],
-            'address'         => ['nullable', 'string', 'max:255'],
-            'phone'           => ['nullable', 'string', 'max:40'],
-            'tax_percent'     => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'store_name' => ['required', 'string', 'max:100'],
+            'tagline' => ['nullable', 'string', 'max:160'],
+            'address' => ['nullable', 'string', 'max:255'],
+            'phone' => ['nullable', 'string', 'max:40'],
+            'tax_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'service_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
-            'qris_merchant'   => ['nullable', 'string', 'max:100'],
-            'receipt_footer'  => ['nullable', 'string', 'max:255'],
-            'custom_note'     => ['nullable', 'string', 'max:255'],
+            'qris_merchant' => ['nullable', 'string', 'max:100'],
+            'receipt_footer' => ['nullable', 'string', 'max:255'],
+            'custom_note' => ['nullable', 'string', 'max:255'],
+            'logo' => ['nullable', 'image', 'mimes:png,jpg,jpeg,webp', 'max:1024', 'dimensions:max_width=1600,max_height=1600', 'prohibited_if:remove_logo,1'],
+            'remove_logo' => ['sometimes', 'boolean'],
         ]);
 
-        DB::transaction(function () use ($validated) {
+        $logo = $request->file('logo');
+        $removeLogo = $request->boolean('remove_logo');
+
+        DB::transaction(function () use ($validated, $logo, $removeLogo) {
             foreach ($validated as $key => $val) {
                 if (! in_array($key, self::ALLOWED_SETTINGS, true)) {
                     continue;
@@ -927,12 +976,23 @@ class PosController extends Controller
                     ['value' => $cleanVal, 'updated_at' => now(), 'created_at' => now()]
                 );
             }
+            if ($logo !== null) {
+                $image = $logo->get();
+                DB::table('store_logos')->upsert([[
+                    'id' => 1,
+                    'mime' => $logo->getMimeType(),
+                    'version' => hash('sha256', $image),
+                    'encoded_image' => base64_encode($image),
+                ]], ['id'], ['mime', 'version', 'encoded_image']);
+            } elseif ($removeLogo) {
+                DB::table('store_logos')->where('id', 1)->delete();
+            }
         });
 
         return response()->json([
-            'success'  => true,
-            'message'  => 'Pengaturan toko berhasil diperbarui.',
-            'settings' => DB::table('settings')->pluck('value', 'key'),
+            'success' => true,
+            'message' => 'Pengaturan toko berhasil diperbarui.',
+            'settings' => DB::table('settings')->pluck('value', 'key')->put('logo_version', $this->logoVersion()),
         ]);
     }
 
@@ -1049,7 +1109,61 @@ class PosController extends Controller
             ->orderBy('id', 'asc')
             ->get();
 
-        return response()->json($this->enrichProductsWithStockCalculations($products));
+        return response()->json($this->availableProducts($this->enrichProductsWithStockCalculations($products)));
+    }
+
+    private function availableProducts(\Illuminate\Support\Collection $products): \Illuminate\Support\Collection
+    {
+        $activeIds = $products->keyBy('id');
+
+        return $products->filter(fn (array $product): bool => $product['item_type'] !== 'paketan'
+            || ($product['bundle_items'] !== [] && collect($product['bundle_items'])->every(function ($item) use ($activeIds): bool {
+                $component = $activeIds->get($item['product_id'] ?? 0);
+
+                return $component !== null && $component['item_type'] === 'satuan';
+            })))->values();
+    }
+
+    public function getManagedProducts(): JsonResponse
+    {
+        $this->ensureExtendedSchema();
+
+        return response()->json($this->enrichProductsWithStockCalculations(DB::table('products')->orderBy('id')->get()));
+    }
+
+    public function updateProductStatus(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate(['active' => ['required', 'boolean']]);
+        abort_unless(DB::table('products')->where('id', $id)->exists(), 404);
+        DB::table('products')->where('id', $id)->update(['active' => (bool) $data['active'], 'updated_at' => now()]);
+
+        return response()->json(['active' => (bool) $data['active']]);
+    }
+
+    public function getProductPhoto(int $id): Response
+    {
+        $photo = DB::table('product_photos')->where('product_id', $id)->first();
+        abort_if($photo === null, 404);
+
+        return response(base64_decode($photo->encoded_image, true), 200, [
+            'Content-Type' => $photo->mime,
+            'Cache-Control' => 'no-cache',
+        ]);
+    }
+
+    private const PRODUCT_PHOTO_RULES = ['nullable', 'image', 'mimes:png,jpg,jpeg,webp', 'max:2048', 'dimensions:max_width=2400,max_height=2400'];
+
+    private function saveProductPhoto(int $id, UploadedFile $photo): void
+    {
+        $image = $photo->get();
+        DB::table('product_photos')->upsert([[
+            'product_id' => $id,
+            'mime' => $photo->getMimeType(),
+            'encoded_image' => base64_encode($image),
+        ]], ['product_id'], ['mime', 'encoded_image']);
+        DB::table('products')->where('id', $id)->update([
+            'image_url' => "/api/products/{$id}/photo?v=".hash('sha256', $image),
+        ]);
     }
 
     public function storeProduct(Request $request)
@@ -1069,7 +1183,7 @@ class PosController extends Controller
             'stock'                     => ['required', 'integer', 'min:0', 'max:100000'],
             'max_stock'                 => ['nullable', 'integer', 'min:1', 'max:100000'],
             'gradient'                  => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6},#[0-9A-Fa-f]{6}$/'],
-            'image_url'                 => ['nullable', 'string', 'max:255'],
+            'photo'                     => self::PRODUCT_PHOTO_RULES,
         ]);
 
         $actorName = $this->cleanText($request->user()?->name ?? 'Admin', 100);
@@ -1077,7 +1191,7 @@ class PosController extends Controller
         $itemType = $data['item_type'] ?? 'satuan';
         $description = $this->cleanText($data['description'] ?? '', 500);
         $gradient = $data['gradient'] ?? '#D8B493,#A67C58';
-        $imageUrl = isset($data['image_url']) ? $this->cleanText($data['image_url'], 255) : null;
+        $photo = $request->file('photo');
         $stock = (int) $data['stock'];
         $maxStock = max($stock, (int) ($data['max_stock'] ?? max(60, $stock)));
 
@@ -1095,7 +1209,7 @@ class PosController extends Controller
             }
         }
 
-        $id = DB::transaction(function () use ($name, $data, $itemType, $cleanBundles, $description, $stock, $maxStock, $gradient, $imageUrl, $actorName) {
+        $id = DB::transaction(function () use ($name, $data, $itemType, $cleanBundles, $description, $stock, $maxStock, $gradient, $photo, $actorName) {
             $productId = DB::table('products')->insertGetId([
                 'name'         => $name,
                 'category'     => $itemType === 'paketan' ? 'Bundling' : $data['category'],
@@ -1108,7 +1222,6 @@ class PosController extends Controller
                 'max_stock'    => $maxStock,
                 'emoji'        => $itemType === 'paketan' ? 'PAKET' : 'KOPI',
                 'gradient'     => $gradient,
-                'image_url'    => $imageUrl,
                 'active'       => 1,
                 'created_at'   => now(),
                 'updated_at'   => now(),
@@ -1126,6 +1239,10 @@ class PosController extends Controller
                 'created_at'   => now(),
                 'updated_at'   => now(),
             ]);
+
+            if ($photo !== null) {
+                $this->saveProductPhoto($productId, $photo);
+            }
 
             return $productId;
         });
@@ -1153,10 +1270,10 @@ class PosController extends Controller
             'price_l'                   => ['required', 'integer', 'min:0', 'max:10000000'],
             'max_stock'                 => ['nullable', 'integer', 'min:1', 'max:100000'],
             'gradient'                  => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6},#[0-9A-Fa-f]{6}$/'],
-            'image_url'                 => ['nullable', 'string', 'max:255'],
+            'photo'                     => self::PRODUCT_PHOTO_RULES,
         ]);
 
-        $product = DB::table('products')->where('id', $id)->where('active', 1)->first();
+        $product = DB::table('products')->where('id', $id)->first();
         if (! $product) {
             return response()->json(['message' => 'Produk tidak ditemukan.'], 404);
         }
@@ -1176,19 +1293,23 @@ class PosController extends Controller
             }
         }
 
-        DB::table('products')->where('id', $id)->update([
-            'name'         => $this->cleanText($data['name'], 120),
-            'category'     => $itemType === 'paketan' ? 'Bundling' : $data['category'],
-            'item_type'    => $itemType,
-            'description'  => $this->cleanText($data['description'] ?? '', 500),
-            'bundle_items' => $itemType === 'paketan' ? json_encode($cleanBundles, JSON_UNESCAPED_UNICODE) : null,
-            'price_m'      => (int) $data['price_m'],
-            'price_l'      => (int) $data['price_l'],
-            'max_stock'    => isset($data['max_stock']) ? max(1, (int) $data['max_stock']) : ($product->max_stock ?? 60),
-            'gradient'     => $data['gradient'] ?? $product->gradient,
-            'image_url'    => array_key_exists('image_url', $data) ? $this->cleanText((string) $data['image_url'], 255) : ($product->image_url ?? null),
-            'updated_at'   => now(),
-        ]);
+        DB::transaction(function () use ($request, $id, $data, $itemType, $cleanBundles, $product) {
+            DB::table('products')->where('id', $id)->update([
+                'name'         => $this->cleanText($data['name'], 120),
+                'category'     => $itemType === 'paketan' ? 'Bundling' : $data['category'],
+                'item_type'    => $itemType,
+                'description'  => $this->cleanText($data['description'] ?? '', 500),
+                'bundle_items' => $itemType === 'paketan' ? json_encode($cleanBundles, JSON_UNESCAPED_UNICODE) : null,
+                'price_m'      => (int) $data['price_m'],
+                'price_l'      => (int) $data['price_l'],
+                'max_stock'    => isset($data['max_stock']) ? max(1, (int) $data['max_stock']) : ($product->max_stock ?? 60),
+                'gradient'     => $data['gradient'] ?? $product->gradient,
+                'updated_at'   => now(),
+            ]);
+            if ($request->hasFile('photo')) {
+                $this->saveProductPhoto($id, $request->file('photo'));
+            }
+        });
 
         return response()->json([
             'success' => true,
@@ -1196,21 +1317,22 @@ class PosController extends Controller
         ]);
     }
 
+    // hapus menu permanen
     public function deleteProduct(int $id)
     {
-        $product = DB::table('products')->where('id', $id)->where('active', 1)->first();
+        $product = DB::table('products')->where('id', $id)->first();
         if (! $product) {
             return response()->json(['message' => 'Produk tidak ditemukan.'], 404);
         }
 
-        DB::table('products')->where('id', $id)->update([
-            'active'     => 0,
-            'updated_at' => now(),
-        ]);
+        DB::transaction(function () use ($id) {
+            DB::table('recipes')->where('product_id', $id)->delete();
+            DB::table('products')->where('id', $id)->delete();
+        });
 
         return response()->json([
             'success' => true,
-            'message' => 'Menu berhasil dinonaktifkan.',
+            'message' => "Menu \"{$product->name}\" berhasil dihapus permanen.",
         ]);
     }
 
@@ -1595,6 +1717,9 @@ class PosController extends Controller
             'items.*.sugar'    => ['nullable', 'string', 'in:' . implode(',', self::ALLOWED_SUGAR)],
             'items.*.note'     => ['nullable', 'string', 'max:200'],
             'promo_code'       => ['nullable', 'string', 'max:50'],
+            'customer_name'    => ['nullable', 'string', 'max:100'],
+            'order_type'       => ['nullable', 'string', 'in:dine_in,takeaway'],
+            'table_number'     => ['nullable', 'string', 'max:30'],
             'payment_method'   => ['required', 'string', 'in:cash,qris'],
             'cash_received'    => ['nullable', 'numeric', 'min:0', 'max:100000000'],
         ]);
@@ -1602,8 +1727,11 @@ class PosController extends Controller
         $user = $request->user();
         $cashierId = (int) ($user?->id ?? $request->input('cashier_id', 2));
         $cashierName = $this->cleanText($user?->name ?? $request->input('cashier_name', 'Kasir Versi Kopi'), 100);
+        $customerName = $this->cleanText($data['customer_name'] ?? '', 100) ?: null;
+        $orderType = $data['order_type'] ?? 'dine_in';
+        $tableNumber = $this->cleanText($data['table_number'] ?? '', 30) ?: null;
 
-        return DB::transaction(function () use ($data, $cashierId, $cashierName) {
+        return DB::transaction(function () use ($data, $cashierId, $cashierName, $customerName, $orderType, $tableNumber) {
             $wib = now()->setTimezone('Asia/Jakarta');
             $prefix = 'KS-' . $wib->format('Ymd');
             $escapedPrefix = addcslashes($prefix, '%_\\');
@@ -1613,9 +1741,9 @@ class PosController extends Controller
                 ->count();
             $orderCode = $prefix . '-' . str_pad((string) ($count + 1), 3, '0', STR_PAD_LEFT);
 
-            $enrichedMap = $this->enrichProductsWithStockCalculations(
+            $enrichedMap = $this->availableProducts($this->enrichProductsWithStockCalculations(
                 DB::table('products')->where('active', 1)->lockForUpdate()->get()
-            )->keyBy('id');
+            ))->keyBy('id');
 
             $subtotal = 0;
             $sanitizedItems = [];
@@ -1691,6 +1819,47 @@ class PosController extends Controller
                 }
             }
 
+            // validasi total gabungan bahan baku dalam 1 keranjang
+            $neededIngredients = [];
+            foreach ($recipeUsageList as $usage) {
+                $recipe = DB::table('recipes')->where('product_id', $usage['product_id'])->first();
+                if (! $recipe) {
+                    continue;
+                }
+                $ingList = json_decode($recipe->ingredients, true);
+                if (! is_array($ingList)) {
+                    continue;
+                }
+                foreach ($ingList as $ing) {
+                    $name = trim($ing['name'] ?? '');
+                    $amtPerCup = $usage['size'] === 'L' ? (float) ($ing['amount_l'] ?? 0) : (float) ($ing['amount_m'] ?? 0);
+                    $useAmt = $amtPerCup * $usage['qty'];
+                    if ($name === '' || $useAmt <= 0) {
+                        continue;
+                    }
+                    $key = mb_strtolower($name);
+                    if (! isset($neededIngredients[$key])) {
+                        $neededIngredients[$key] = ['name' => $name, 'amount' => 0.0];
+                    }
+                    $neededIngredients[$key]['amount'] += $useAmt;
+                }
+            }
+
+            foreach ($neededIngredients as $key => $need) {
+                $stockRow = DB::table('ingredients_stock')
+                    ->whereRaw('LOWER(name) = ?', [$key])
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($stockRow && $need['amount'] > (float) $stockRow->current_stock) {
+                    $avail = round((float) $stockRow->current_stock, 1);
+                    $req = round($need['amount'], 1);
+                    throw ValidationException::withMessages([
+                        'items' => ["Stok bahan {$stockRow->name} tidak cukup untuk gabungan pesanan ini (butuh {$req} {$stockRow->unit}, tersisa {$avail} {$stockRow->unit})."],
+                    ]);
+                }
+            }
+
             $discount = 0;
             $appliedPromoCode = null;
             if (! empty($data['promo_code'])) {
@@ -1700,18 +1869,29 @@ class PosController extends Controller
                     ->where('active', 1)
                     ->first();
 
-                if ($promo && $subtotal >= (int) $promo->min_subtotal) {
-                    $appliedPromoCode = $promo->code;
-                    if ($promo->type === 'percent') {
-                        $discount = (int) round(($subtotal * (int) $promo->value) / 100);
-                        if ((int) $promo->max_discount > 0 && $discount > (int) $promo->max_discount) {
-                            $discount = (int) $promo->max_discount;
-                        }
-                    } else {
-                        $discount = (int) $promo->value;
-                    }
-                    $discount = min($discount, $subtotal);
+                if (! $promo) {
+                    throw ValidationException::withMessages([
+                        'promo_code' => ["Kode promo \"{$code}\" tidak ditemukan atau sudah tidak aktif."],
+                    ]);
                 }
+
+                if ($subtotal < (int) $promo->min_subtotal) {
+                    $minFmt = number_format((int) $promo->min_subtotal, 0, ',', '.');
+                    throw ValidationException::withMessages([
+                        'promo_code' => ["Minimal belanja untuk promo {$promo->code} adalah Rp {$minFmt}."],
+                    ]);
+                }
+
+                $appliedPromoCode = $promo->code;
+                if ($promo->type === 'percent') {
+                    $discount = (int) round(($subtotal * (int) $promo->value) / 100);
+                    if ((int) $promo->max_discount > 0 && $discount > (int) $promo->max_discount) {
+                        $discount = (int) $promo->max_discount;
+                    }
+                } else {
+                    $discount = (int) $promo->value;
+                }
+                $discount = min($discount, $subtotal);
             }
 
             $settings = DB::table('settings')->pluck('value', 'key');
@@ -1740,6 +1920,9 @@ class PosController extends Controller
                 'code'           => $orderCode,
                 'cashier_id'     => $cashierId,
                 'cashier_name'   => $cashierName,
+                'customer_name'  => $customerName,
+                'order_type'     => $orderType,
+                'table_number'   => $tableNumber,
                 'items'          => json_encode($sanitizedItems, JSON_UNESCAPED_UNICODE),
                 'subtotal'       => $subtotal,
                 'discount'       => $discount,
@@ -1785,5 +1968,123 @@ class PosController extends Controller
                 'items'         => $sanitizedItems,
             ], 201);
         });
+    }
+
+    // hapus bahan baku
+    public function deleteIngredient(int $id)
+    {
+        $this->ensureExtendedSchema();
+
+        $deleted = DB::table('ingredients_stock')->where('id', $id)->delete();
+        if (! $deleted) {
+            return response()->json(['message' => 'Bahan baku tidak ditemukan.'], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Bahan baku berhasil dihapus dari gudang.',
+        ]);
+    }
+
+    // batalkan transaksi dan kembalikan stok
+    public function voidOrder(Request $request, int $id)
+    {
+        $this->ensureExtendedSchema();
+        $actorName = $this->cleanText($request->user()?->name ?? 'Admin', 100);
+
+        return DB::transaction(function () use ($id, $actorName) {
+            $order = DB::table('orders')->where('id', $id)->lockForUpdate()->first();
+            if (! $order) {
+                return response()->json(['message' => 'Transaksi tidak ditemukan.'], 404);
+            }
+            if (($order->status ?? 'paid') === 'void') {
+                return response()->json(['message' => 'Transaksi ini sudah dibatalkan sebelumnya.'], 422);
+            }
+
+            $items = json_decode($order->items ?? '[]', true);
+            if (! is_array($items)) {
+                $items = [];
+            }
+
+            foreach ($items as $item) {
+                $prodId = (int) ($item['id'] ?? 0);
+                $qty = max(1, (int) ($item['qty'] ?? 1));
+                $size = ($item['size'] ?? 'M') === 'L' ? 'L' : 'M';
+                $prod = DB::table('products')->where('id', $prodId)->first();
+
+                if ($prod && ($prod->item_type ?? 'satuan') === 'paketan' && ! empty($prod->bundle_items)) {
+                    $bundleItems = json_decode($prod->bundle_items, true) ?: [];
+                    foreach ($bundleItems as $bItem) {
+                        $compId = (int) ($bItem['product_id'] ?? 0);
+                        $compQty = max(1, (int) ($bItem['qty'] ?? 1)) * $qty;
+                        $this->restoreRawMaterialsForProduct($compId, $size, $compQty, $order->code, $actorName);
+                    }
+                } elseif ($prodId > 0) {
+                    $this->restoreRawMaterialsForProduct($prodId, $size, $qty, $order->code, $actorName);
+                }
+            }
+
+            DB::table('orders')->where('id', $id)->update([
+                'status'     => 'void',
+                'updated_at' => now(),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Transaksi {$order->code} dibatalkan dan stok bahan baku telah dikembalikan.",
+            ]);
+        });
+    }
+
+    // kembalikan bahan baku gudang
+    private function restoreRawMaterialsForProduct(int $productId, string $size, int $qty, string $orderCode, string $actorName): void
+    {
+        $recipe = DB::table('recipes')->where('product_id', $productId)->first();
+        if (! $recipe) {
+            return;
+        }
+        $prod = DB::table('products')->where('id', $productId)->first();
+        $prodName = $prod->name ?? "Menu #{$productId}";
+        $ingredients = json_decode($recipe->ingredients, true);
+        if (! is_array($ingredients)) {
+            return;
+        }
+
+        foreach ($ingredients as $ing) {
+            $name = trim($ing['name'] ?? '');
+            $amountPerCup = $size === 'L' ? (float) ($ing['amount_l'] ?? 0) : (float) ($ing['amount_m'] ?? 0);
+            $totalRestore = $amountPerCup * $qty;
+            if ($name === '' || $totalRestore <= 0) {
+                continue;
+            }
+
+            $stockRow = DB::table('ingredients_stock')
+                ->whereRaw('LOWER(name) = ?', [mb_strtolower($name)])
+                ->lockForUpdate()
+                ->first();
+
+            if ($stockRow) {
+                $newStock = (float) $stockRow->current_stock + $totalRestore;
+                $newMax = max((float) $stockRow->max_stock, $newStock);
+                DB::table('ingredients_stock')->where('id', $stockRow->id)->update([
+                    'current_stock' => $newStock,
+                    'max_stock'     => $newMax,
+                    'updated_at'    => now(),
+                ]);
+
+                DB::table('inventory_logs')->insert([
+                    'product_id'   => (int) $stockRow->id,
+                    'product_name' => "Bahan: {$stockRow->name} ({$stockRow->unit})",
+                    'type'         => 'in',
+                    'qty'          => (int) round($totalRestore),
+                    'stock_after'  => (int) round($newStock),
+                    'note'         => "Void {$qty}x {$prodName} ({$size}) • {$orderCode}",
+                    'reference'    => $orderCode ?: 'VOID',
+                    'actor_name'   => $actorName,
+                    'created_at'   => now(),
+                    'updated_at'   => now(),
+                ]);
+            }
+        }
     }
 }

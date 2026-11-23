@@ -29,6 +29,10 @@ export const PRODUCT_IMAGES_CATALOG = [
 export function getProductImage(product) {
   if (!product) return null;
   if (product.image_url && String(product.image_url).trim() !== '') {
+    if (/^\/api\/products\/\d+\/photo\?v=[a-f0-9]{64}$/.test(product.image_url)) {
+      const base = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
+      return base + product.image_url.slice('/api'.length);
+    }
     return product.image_url;
   }
 

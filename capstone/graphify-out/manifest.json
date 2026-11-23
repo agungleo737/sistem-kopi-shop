@@ -1,0 +1,344 @@
+{
+  "package.json": {
+    "mtime": 1794186752.4339864,
+    "seen": 1795267390.572257,
+    "ast_hash": "9ceab0e99e531547fe5f7cfc06be1b82",
+    "semantic_hash": "9ceab0e99e531547fe5f7cfc06be1b82"
+  },
+  "versikopi-api/app/Http/Controllers/AuthController.php": {
+    "mtime": 1794748583.190427,
+    "seen": 1795267390.5722718,
+    "ast_hash": "eee1a791f593c85c958624aad3c3c564",
+    "semantic_hash": "eee1a791f593c85c958624aad3c3c564"
+  },
+  "versikopi-api/app/Http/Controllers/Controller.php": {
+    "mtime": 1794186471.9814818,
+    "seen": 1795267390.5722785,
+    "ast_hash": "545353270d70df9aab31a327069f5da7",
+    "semantic_hash": "545353270d70df9aab31a327069f5da7"
+  },
+  "versikopi-api/app/Http/Controllers/PosController.php": {
+    "mtime": 1794748784.6616826,
+    "seen": 1795267390.5722828,
+    "ast_hash": "40b645fb6ccc1fffa3bd1ec8655065cb",
+    "semantic_hash": "40b645fb6ccc1fffa3bd1ec8655065cb"
+  },
+  "versikopi-api/app/Http/Middleware/RoleMiddleware.php": {
+    "mtime": 1794741088.9640932,
+    "seen": 1795267390.5722866,
+    "ast_hash": "56ede59ac26b71c57296a9c600abe1f2",
+    "semantic_hash": "56ede59ac26b71c57296a9c600abe1f2"
+  },
+  "versikopi-api/app/Http/Middleware/SecurityHeadersMiddleware.php": {
+    "mtime": 1794742369.0453527,
+    "seen": 1795267390.57229,
+    "ast_hash": "93409cf4cb256b268e20f16de6f4915a",
+    "semantic_hash": "93409cf4cb256b268e20f16de6f4915a"
+  },
+  "versikopi-api/app/Models/User.php": {
+    "mtime": 1793710761.243509,
+    "seen": 1795267390.5722942,
+    "ast_hash": "5a3b7550660188bcbc4b1fa8b8b2871b",
+    "semantic_hash": "5a3b7550660188bcbc4b1fa8b8b2871b"
+  },
+  "versikopi-api/app/Providers/AppServiceProvider.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5722978,
+    "ast_hash": "c0094f35cad6bba7636002a62186dae4",
+    "semantic_hash": "c0094f35cad6bba7636002a62186dae4"
+  },
+  "versikopi-api/artisan": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723014,
+    "ast_hash": "e66bb13691f6184c762c196427d8e685",
+    "semantic_hash": "e66bb13691f6184c762c196427d8e685"
+  },
+  "versikopi-api/bootstrap/app.php": {
+    "mtime": 1794733825.9069576,
+    "seen": 1795267390.572305,
+    "ast_hash": "927edd30bd8ce61ff3d3417fcd6987cb",
+    "semantic_hash": "927edd30bd8ce61ff3d3417fcd6987cb"
+  },
+  "versikopi-api/bootstrap/providers.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.572308,
+    "ast_hash": "888c810b5a4720916f07aa05dd2c2dd3",
+    "semantic_hash": "888c810b5a4720916f07aa05dd2c2dd3"
+  },
+  "versikopi-api/composer.json": {
+    "mtime": 1793707550.278908,
+    "seen": 1795267390.5723116,
+    "ast_hash": "13e9bd5fae740e375c30731be7467750",
+    "semantic_hash": "13e9bd5fae740e375c30731be7467750"
+  },
+  "versikopi-api/config/app.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723147,
+    "ast_hash": "8befef279da74e4a8e393cb3d59fd354",
+    "semantic_hash": "8befef279da74e4a8e393cb3d59fd354"
+  },
+  "versikopi-api/config/auth.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723178,
+    "ast_hash": "26354511ab860b301f2a3554bc388b91",
+    "semantic_hash": "26354511ab860b301f2a3554bc388b91"
+  },
+  "versikopi-api/config/cache.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.572321,
+    "ast_hash": "9775fa662b3c35e5f130b66f785155d2",
+    "semantic_hash": "9775fa662b3c35e5f130b66f785155d2"
+  },
+  "versikopi-api/config/database.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723238,
+    "ast_hash": "594a01554ab7583541a8fb05a69f935f",
+    "semantic_hash": "594a01554ab7583541a8fb05a69f935f"
+  },
+  "versikopi-api/config/filesystems.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723274,
+    "ast_hash": "bde1aa1027f0448f17348dbd93f3d7ea",
+    "semantic_hash": "bde1aa1027f0448f17348dbd93f3d7ea"
+  },
+  "versikopi-api/config/logging.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723305,
+    "ast_hash": "57cabdaa04bc44810fedbea9ce77b052",
+    "semantic_hash": "57cabdaa04bc44810fedbea9ce77b052"
+  },
+  "versikopi-api/config/mail.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723336,
+    "ast_hash": "18601a927b48d38337ba2077426a7d60",
+    "semantic_hash": "18601a927b48d38337ba2077426a7d60"
+  },
+  "versikopi-api/config/queue.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.572337,
+    "ast_hash": "f98ce92e7bf51db1fabaf8a30e12fc5a",
+    "semantic_hash": "f98ce92e7bf51db1fabaf8a30e12fc5a"
+  },
+  "versikopi-api/config/sanctum.php": {
+    "mtime": 1793707570.4665885,
+    "seen": 1795267390.5723403,
+    "ast_hash": "e3887ebee464a1b2c014cb16696a2b50",
+    "semantic_hash": "e3887ebee464a1b2c014cb16696a2b50"
+  },
+  "versikopi-api/config/services.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723436,
+    "ast_hash": "918f5aa09663e375f4570301a91548f9",
+    "semantic_hash": "918f5aa09663e375f4570301a91548f9"
+  },
+  "versikopi-api/config/session.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723474,
+    "ast_hash": "5ea7169252ec3cc7fad471f5cd0d7678",
+    "semantic_hash": "5ea7169252ec3cc7fad471f5cd0d7678"
+  },
+  "versikopi-api/database/factories/UserFactory.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723507,
+    "ast_hash": "1c9f381f9c2bc3027971a3bfdbe99164",
+    "semantic_hash": "1c9f381f9c2bc3027971a3bfdbe99164"
+  },
+  "versikopi-api/database/migrations/0001_01_01_000000_create_users_table.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723538,
+    "ast_hash": "138280095e9d19f2ba6fb830415602e2",
+    "semantic_hash": "138280095e9d19f2ba6fb830415602e2"
+  },
+  "versikopi-api/database/migrations/0001_01_01_000001_create_cache_table.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723572,
+    "ast_hash": "6952fb360e8d8b84e6f47573e4459d48",
+    "semantic_hash": "6952fb360e8d8b84e6f47573e4459d48"
+  },
+  "versikopi-api/database/migrations/0001_01_01_000002_create_jobs_table.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723608,
+    "ast_hash": "b0603b9fa0a27473971da76bb0c42ee1",
+    "semantic_hash": "b0603b9fa0a27473971da76bb0c42ee1"
+  },
+  "versikopi-api/database/migrations/2026_11_03_120611_create_personal_access_tokens_table.php": {
+    "mtime": 1793707570.4626644,
+    "seen": 1795267390.5723639,
+    "ast_hash": "eb77af89d184f92ec893eff344c34999",
+    "semantic_hash": "eb77af89d184f92ec893eff344c34999"
+  },
+  "versikopi-api/database/migrations/2026_11_03_125702_add_role_to_users_table.php": {
+    "mtime": 1793710685.7595725,
+    "seen": 1795267390.572367,
+    "ast_hash": "9a5af51176bd438c476dd0e267a624d7",
+    "semantic_hash": "9a5af51176bd438c476dd0e267a624d7"
+  },
+  "versikopi-api/database/migrations/2026_11_03_135227_create_settings_table.php": {
+    "mtime": 1793713960.9873753,
+    "seen": 1795267390.5723698,
+    "ast_hash": "577b2f449fda3698320a642446a3fb5f",
+    "semantic_hash": "577b2f449fda3698320a642446a3fb5f"
+  },
+  "versikopi-api/database/migrations/2026_11_08_154539_create_kopi_tables.php": {
+    "mtime": 1794152746.1675122,
+    "seen": 1795267390.5723727,
+    "ast_hash": "26321b8198b469307e2455e6106555d1",
+    "semantic_hash": "26321b8198b469307e2455e6106555d1"
+  },
+  "versikopi-api/database/migrations/2026_11_15_165300_create_recipes_table.php": {
+    "mtime": 1794736434.074188,
+    "seen": 1795267390.5723758,
+    "ast_hash": "4e6c2eed2daa73469a3d1967c695eafb",
+    "semantic_hash": "4e6c2eed2daa73469a3d1967c695eafb"
+  },
+  "versikopi-api/database/seeders/DatabaseSeeder.php": {
+    "mtime": 1794747829.8862727,
+    "seen": 1795267390.5723786,
+    "ast_hash": "fe9796f8a134f46a9d56eb1f192bd203",
+    "semantic_hash": "fe9796f8a134f46a9d56eb1f192bd203"
+  },
+  "versikopi-api/package.json": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.572382,
+    "ast_hash": "59ec21ff5f1f5b3acb8f2f82c8b6dc77",
+    "semantic_hash": "59ec21ff5f1f5b3acb8f2f82c8b6dc77"
+  },
+  "versikopi-api/public/index.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.572385,
+    "ast_hash": "d8eda274115af5fd2aaa8230af329ef7",
+    "semantic_hash": "d8eda274115af5fd2aaa8230af329ef7"
+  },
+  "versikopi-api/resources/js/app.js": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723882,
+    "ast_hash": "b519d08ef66fd54910edbedba6181ec2",
+    "semantic_hash": "b519d08ef66fd54910edbedba6181ec2"
+  },
+  "versikopi-api/resources/views/welcome.blade.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5723913,
+    "ast_hash": "1a03818ea91deb4f3989c6c994e5867c",
+    "semantic_hash": "1a03818ea91deb4f3989c6c994e5867c"
+  },
+  "versikopi-api/routes/api.php": {
+    "mtime": 1794742369.2092183,
+    "seen": 1795267390.572394,
+    "ast_hash": "cce3608e3a1504d69d2055134dd7e9da",
+    "semantic_hash": "cce3608e3a1504d69d2055134dd7e9da"
+  },
+  "versikopi-api/routes/console.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.572397,
+    "ast_hash": "3c6ce2e6d16444282b24a9aa63885563",
+    "semantic_hash": "3c6ce2e6d16444282b24a9aa63885563"
+  },
+  "versikopi-api/routes/web.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5724003,
+    "ast_hash": "84625c52e743b1a4178bb27b7afb3615",
+    "semantic_hash": "84625c52e743b1a4178bb27b7afb3615"
+  },
+  "versikopi-api/tests/Feature/ExampleTest.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5724037,
+    "ast_hash": "0f4d91c9c5bbcd4e2f46cf885acb7fb6",
+    "semantic_hash": "0f4d91c9c5bbcd4e2f46cf885acb7fb6"
+  },
+  "versikopi-api/tests/TestCase.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.572407,
+    "ast_hash": "7e567dc27e68d5b57bae16af07f68907",
+    "semantic_hash": "7e567dc27e68d5b57bae16af07f68907"
+  },
+  "versikopi-api/tests/Unit/ExampleTest.php": {
+    "mtime": 1790776605.0,
+    "seen": 1795267390.5724106,
+    "ast_hash": "3f679e9508c834f0ad95943455fcd836",
+    "semantic_hash": "3f679e9508c834f0ad95943455fcd836"
+  },
+  "versikopi-api/vite.config.js": {
+    "mtime": 1793710354.2340465,
+    "seen": 1795267390.5724156,
+    "ast_hash": "8be68439402492554df13a2c506303a5",
+    "semantic_hash": "8be68439402492554df13a2c506303a5"
+  },
+  "versikopi-web/eslint.config.js": {
+    "mtime": 1793708892.0233483,
+    "seen": 1795267390.5724185,
+    "ast_hash": "3aa4b57d7f08181d86bde52a4dcb7f22",
+    "semantic_hash": "3aa4b57d7f08181d86bde52a4dcb7f22"
+  },
+  "versikopi-web/package.json": {
+    "mtime": 1794185921.5716226,
+    "seen": 1795267390.5724218,
+    "ast_hash": "b8e1d413a330fbd3f38e5edb8053be73",
+    "semantic_hash": "b8e1d413a330fbd3f38e5edb8053be73"
+  },
+  "versikopi-web/src/App.jsx": {
+    "mtime": 1793713576.0895667,
+    "seen": 1795267390.5724247,
+    "ast_hash": "08aabebebb212cbe55444123f4b7b0df",
+    "semantic_hash": "08aabebebb212cbe55444123f4b7b0df"
+  },
+  "versikopi-web/src/components/Icons.jsx": {
+    "mtime": 1794738369.4743154,
+    "seen": 1795267390.5724277,
+    "ast_hash": "2772424e3ca26398b71c75f9ed2309d9",
+    "semantic_hash": "2772424e3ca26398b71c75f9ed2309d9"
+  },
+  "versikopi-web/src/components/ProtectedRoute.jsx": {
+    "mtime": 1793713364.632969,
+    "seen": 1795267390.572431,
+    "ast_hash": "3121757d84b2584ba51e07080bc25b7a",
+    "semantic_hash": "3121757d84b2584ba51e07080bc25b7a"
+  },
+  "versikopi-web/src/context/AuthContext.jsx": {
+    "mtime": 1793713614.6095095,
+    "seen": 1795267390.5724342,
+    "ast_hash": "98b3f97ed66ae6bdefc8a80a48c129fc",
+    "semantic_hash": "98b3f97ed66ae6bdefc8a80a48c129fc"
+  },
+  "versikopi-web/src/lib/api.js": {
+    "mtime": 1794748052.4663634,
+    "seen": 1795267390.5724378,
+    "ast_hash": "684e025f22b43c63df63cf8699653deb",
+    "semantic_hash": "684e025f22b43c63df63cf8699653deb"
+  },
+  "versikopi-web/src/lib/productImages.js": {
+    "mtime": 1794746432.562478,
+    "seen": 1795267390.5724406,
+    "ast_hash": "b83ef5c209099385276196927e4dd868",
+    "semantic_hash": "b83ef5c209099385276196927e4dd868"
+  },
+  "versikopi-web/src/main.jsx": {
+    "mtime": 1794186211.8743238,
+    "seen": 1795267390.5724435,
+    "ast_hash": "f2ab4f786f768fbf922084976c11b8d0",
+    "semantic_hash": "f2ab4f786f768fbf922084976c11b8d0"
+  },
+  "versikopi-web/src/pages/Admin.jsx": {
+    "mtime": 1794747830.0794127,
+    "seen": 1795267390.572446,
+    "ast_hash": "2fd12686872cb45ef157cded4c96376f",
+    "semantic_hash": "2fd12686872cb45ef157cded4c96376f"
+  },
+  "versikopi-web/src/pages/Kasir.jsx": {
+    "mtime": 1794747830.2034175,
+    "seen": 1795267390.5724494,
+    "ast_hash": "1abe4cd3b69e991138cbe9144fcff552",
+    "semantic_hash": "1abe4cd3b69e991138cbe9144fcff552"
+  },
+  "versikopi-web/src/pages/Login.jsx": {
+    "mtime": 1794742369.5469613,
+    "seen": 1795267390.5724525,
+    "ast_hash": "37b6e912851f0acfb375d1c7d0dd63c7",
+    "semantic_hash": "37b6e912851f0acfb375d1c7d0dd63c7"
+  },
+  "versikopi-web/vite.config.js": {
+    "mtime": 1794803542.2278426,
+    "seen": 1795267390.5724561,
+    "ast_hash": "cf55a4f26d97d38adecada3c499eaa41",
+    "semantic_hash": "cf55a4f26d97d38adecada3c499eaa41"
+  }
+}

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import api from '../lib/api'
 
 const AuthContext = createContext(null)
@@ -11,6 +11,24 @@ export function AuthProvider({ children }) {
       return null
     }
   })
+
+  // verifikasi sesi aktif ke server
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    if (!token) return
+    api.get('/me')
+      .then(({ data }) => {
+        if (data?.id) {
+          localStorage.setItem('user', JSON.stringify(data))
+          setUser(data)
+        }
+      })
+      .catch(() => {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        setUser(null)
+      })
+  }, [])
 
   const login = async ({ email, password, role }) => {
     const { data } = await api.post('/login', { email, password, role })

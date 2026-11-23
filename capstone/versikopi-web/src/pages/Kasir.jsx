@@ -17,7 +17,9 @@ import {
   ProductIllustration,
 } from '../components/Icons';
 import { getProductImage } from '../lib/productImages';
-import logo from '../assets/logo.png';
+import { getStoreLogo } from '../lib/branding';
+import receiptLogo from '../assets/hitamputih.png';
+import { getMenuCategories } from '../lib/menuCategories';
 
 const SUGAR_LEVELS = [
   { value: '100%', name: 'Normal' },
@@ -212,7 +214,7 @@ export default function Kasir() {
 
       const stockPct = minPct ?? 100;
       const isLocked = minPortions <= 3 || stockPct <= 5;
-      const isWarning = !isLocked && (minPortions <= 15 || stockPct <= 20);
+      const isWarning = !isLocked && stockPct <= 20;
 
       return {
         ...prod,
@@ -261,7 +263,7 @@ export default function Kasir() {
   const paketanProducts = liveProducts.filter((p) => p.item_type === 'paketan');
 
   const activeTypeProducts = menuType === 'paketan' ? paketanProducts : satuanProducts;
-  const categories = ['Semua', ...new Set(satuanProducts.map((p) => p.category).filter(Boolean))];
+  const categories = getMenuCategories(liveProducts);
 
   // peringatan dan kunci stok
   const lockedProducts = liveProducts.filter(
@@ -270,7 +272,7 @@ export default function Kasir() {
   const warningProducts = liveProducts.filter(
     (p) =>
       !lockedProducts.some((lp) => lp.id === p.id) &&
-      (p.is_warning || Number(p.stock) <= 15 || Number(p.stock_percent ?? 100) <= 20)
+      Number(p.stock_percent ?? 100) <= 20
   );
   const alertIngredients = liveIngredients.filter((ing) => ing.is_locked || ing.is_warning);
 
@@ -609,7 +611,7 @@ export default function Kasir() {
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="logo-ring small">
-            <img src={logo} alt="Logo" />
+            <img src={getStoreLogo(settings.logo_version)} alt="" />
           </div>
           <div className="sidebar-brand-text">
             <strong>{settings.store_name || 'VERSI KOPI'}</strong>
@@ -686,16 +688,6 @@ export default function Kasir() {
             </h1>
             <p>Stok bahan baku</p>
           </div>
-
-          <div className="topbar-actions">
-            <div className="user-chip">
-              <div className="avatar">{(user?.name || 'K').charAt(0).toUpperCase()}</div>
-              <div className="user-chip-text">
-                <strong>{user?.name || 'Kasir'}</strong>
-                <small>Petugas Kasir</small>
-              </div>
-            </div>
-          </div>
         </header>
 
         {notice && (
@@ -730,7 +722,7 @@ export default function Kasir() {
                         )}
                         {warningProducts.length > 0 && (
                           <span className="pos-alert-chip warning">
-                            {warningProducts.length} Menu Menipis (≤20% / ≤15)
+                            {warningProducts.length} Menu Menipis (≤20%)
                           </span>
                         )}
                       </div>
@@ -760,7 +752,7 @@ export default function Kasir() {
                         )}
                         {warningProducts.length > 0 && (
                           <div className="pos-alert-section">
-                            <small>Peringatan Stok Menipis (Sisa ≤ 20% atau ≤ 15 porsi):</small>
+                            <small>Peringatan Stok Menipis (Sisa ≤ 20%):</small>
                             <div className="pos-alert-pill-list">
                               {warningProducts.map((p) => (
                                 <span key={p.id} className="pos-mini-alert warning">
@@ -867,7 +859,7 @@ export default function Kasir() {
                       const stockPct = Number(p.stock_percent ?? 100);
                       const isLockedProduct = Boolean(p.is_locked || p.stock <= 3 || stockPct <= 5);
                       const isWarningProduct =
-                        !isLockedProduct && Boolean(p.is_warning || p.stock <= 15 || stockPct <= 20);
+                        !isLockedProduct && stockPct <= 20;
                       const remainingOrderable = getOrderableForProduct(p, 'M');
                       const isButtonLocked = isLockedProduct || remainingOrderable <= 0;
 
@@ -1916,7 +1908,7 @@ export default function Kasir() {
             <div className="modal-body">
               <div className="receipt">
                 <div className="receipt-center">
-                  <img src={logo} alt="Logo" className="receipt-logo" />
+                  <img src={receiptLogo} alt="" className="receipt-logo" />
                   <h4>{settings.store_name || 'VERSI KOPI'}</h4>
                   <div className="rc-sub">{settings.tagline}</div>
                   <div className="rc-sub">{settings.address}</div>
@@ -1998,7 +1990,7 @@ export default function Kasir() {
                 )}
                 <div className="dashed"></div>
                 <div className="receipt-foot">
-                  {settings.receipt_footer || 'Terima kasih telah berkunjung ke Versi Kopi'}
+                  {settings.receipt_footer || 'Terima kasih telah berkunjung'}
                 </div>
               </div>
             </div>

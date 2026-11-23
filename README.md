@@ -17,7 +17,7 @@
    - Ketika 1 menu dipesan di kasir, stok bahan gudang otomatis terpotong sesuai takaran resep ukuran **Regular (M)** atau **Large (L)**, dan kapasitas porsi seluruh menu lain yang memakai bahan yang sama otomatis ikut terhitung ulang secara *real-time*.
 
 3. **Peringatan Stok Menipis & Kunci Otomatis (*Auto-Lock*)**
-   - **Peringatan Kuning (*Warning*)**: Muncul otomatis di Admin & Kasir saat sisa stok bahan/porsi `≤ 20%` atau `≤ 15 porsi`.
+   - **Peringatan Kuning (*Warning*)**: Muncul otomatis di Admin & Kasir saat persentase stok `≤ 20%` dan belum terkunci.
    - **Kunci Otomatis (*Locked*)**: Tombol tambah pesanan di Kasir otomatis terkunci saat sisa stok `≤ 5%` atau `≤ 3 porsi`.
 
 4. **Katalog Menu Terbagi Dua (Menu Satuan & Menu Paketan / Bundling)**
@@ -48,7 +48,7 @@ $$\text{Stok Paket} = \min_{k} \left( \left\lfloor \frac{\text{Stok GudangSaat I
 $$\text{Persentase Bahan } i = \text{round}\left( \frac{\text{Stok Saat Ini}_i}{\text{Kapasitas Penuh (100\%)}_i} \times 100 \right)$$
 
 - **Status Terkunci (*Locked*)**: $\text{Stok Porsi} \le 3 \quad \text{ATAU} \quad \text{Persentase Stok} \le 5\%$
-- **Status Menipis (*Warning*)**: $\text{Stok Porsi} \le 15 \quad \text{ATAU} \quad \text{Persentase Stok} \le 20\%$
+- **Status Menipis (*Warning*)**: $\text{Persentase Stok} \le 20\%$ dan belum terkunci.
 
 ---
 

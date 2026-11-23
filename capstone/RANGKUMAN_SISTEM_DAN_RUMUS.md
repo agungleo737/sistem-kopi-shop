@@ -99,7 +99,7 @@ Menu Paketan $B$ terdiri dari daftar produk satuan beserta kuantitasnya: $\{(P_1
 
 ---
 
-## 5. Rumus Peringatan Stok ($\le 20\%$ / $\le 15$) & Kunci Tombol ($\le 5\%$ / $\le 3$)
+## 5. Rumus Peringatan Stok ($\le 20\%$) & Kunci Tombol ($\le 5\%$ / $\le 3$)
 
 Setiap produk dievaluasi secara otomatis di Backend ([PosController.php](file:///c:/Users/Agungleo/capstone/versikopi-api/app/Http/Controllers/PosController.php)) dan secara *real-time* di Frontend ([Kasir.jsx](file:///c:/Users/Agungleo/capstone/versikopi-web/src/pages/Kasir.jsx)):
 
@@ -109,7 +109,7 @@ $$\text{is\_locked} = (Stok_P \le 3) \quad \text{ATAU} \quad (\%_P \le 5\%)$$
 
 ### B. Status Peringatan Menipis (`is_warning`)
 Peringatan kuning muncul di **Banner Kasir** dan **Banner Admin** apabila menu belum terkunci namun memenuhi **salah satu** syarat berikut:
-$$\text{is\_warning} = \neg(\text{is\_locked}) \quad \text{DAN} \quad \big( (Stok_P \le 15) \;\text{ ATAU }\; (\%_P \le 20\%) \big)$$
+$$\text{is\_warning} = \neg(\text{is\_locked}) \quad \text{DAN} \quad (\%_P \le 20\%)$$
 
 ### C. Rumus Batas Maksimum Porsi yang Bisa Dimasukkan ke Keranjang (`Orderable Qty`)
 Agar pesanan di keranjang tidak menghabiskan stok melewati batas kunci ($\le 3$ porsi atau $\le 5\%$), jumlah maksimum cup yang boleh diambil kasir untuk ukuran cup yang dipilih (`M` atau `L`) adalah:

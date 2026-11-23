@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../lib/api';
 import {
@@ -16,8 +16,10 @@ import {
   IconLayers,
   ProductIllustration,
 } from '../components/Icons';
-import { getProductImage, PRODUCT_IMAGES_CATALOG } from '../lib/productImages';
-import logo from '../assets/logo.png';
+import { getProductImage } from '../lib/productImages';
+import receiptLogo from '../assets/hitamputih.png';
+import { getStoreLogo } from '../lib/branding';
+import { getMenuCategories } from '../lib/menuCategories';
 
 const GRADIENTS = [
   { label: 'Karamel Lembut', value: '#D8B493,#A67C58' },
@@ -32,7 +34,7 @@ const CATEGORIES = ['Signature', 'Coffee', 'Non-Coffee', 'Pastry', 'Snack', 'Bun
 const RECIPE_UNITS = ['ml', 'gr', 'shot', 'pump', 'pcs', 'sdm', 'sdt'];
 
 export default function Admin() {
-  const { user, logout } = useAuth();
+  const { logout } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
 
   const [products, setProducts] = useState([]);
@@ -40,9 +42,19 @@ export default function Admin() {
   const [promos, setPromos] = useState([]);
   const [recipes, setRecipes] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [users, setUsers] = useState([]);
   const [inventoryLogs, setInventoryLogs] = useState([]);
+
+  // form akun kasir dan admin
+  const [editingUserId, setEditingUserId] = useState(null);
+  const [userFormName, setUserFormName] = useState('');
+  const [userFormEmail, setUserFormEmail] = useState('');
+  const [userFormPassword, setUserFormPassword] = useState('');
+  const [userFormRole, setUserFormRole] = useState('kasir');
+  const [savingUser, setSavingUser] = useState(false);
   const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
+  const [catalogLoadError, setCatalogLoadError] = useState(false);
   const [notice, setNotice] = useState(null);
 
   // filter pencarian admin
@@ -69,7 +81,14 @@ export default function Admin() {
   const [newProductPriceL, setNewProductPriceL] = useState(25000);
   const [newProductDesc, setNewProductDesc] = useState('');
   const [newProductGradient, setNewProductGradient] = useState(GRADIENTS[0].value);
-  const [newProductImageUrl, setNewProductImageUrl] = useState(PRODUCT_IMAGES_CATALOG[0].url);
+  const [savedProductPhoto, setSavedProductPhoto] = useState(null);
+  const [productPhoto, setProductPhoto] = useState(null);
+  const [productPhotoError, setProductPhotoError] = useState('');
+  const productPhotoPreview = productPhoto?.url;
+
+  useEffect(() => () => {
+    if (productPhotoPreview) URL.revokeObjectURL(productPhotoPreview);
+  }, [productPhotoPreview]);
   const [newProductBundleItems, setNewProductBundleItems] = useState([
     { product_id: '', name: '', qty: 1 },
   ]);
@@ -117,6 +136,17 @@ export default function Admin() {
     receipt_footer: '',
   });
   const [savingSettings, setSavingSettings] = useState(false);
+  const [logoDraft, setLogoDraft] = useState(null);
+  const [removeLogo, setRemoveLogo] = useState(false);
+  const logoInput = useRef(null);
+  const previewUrl = logoDraft?.url;
+
+  useEffect(() => () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
+
+  const savedLogo = getStoreLogo(settings.logo_version);
+  const previewLogo = previewUrl || getStoreLogo(removeLogo ? null : settings.logo_version);
 
   const showNotice = (text, type = 'success') => {
     setNotice({ text, type });
@@ -127,35 +157,37 @@ export default function Admin() {
 
   const loadData = async () => {
     try {
-      const [resProd, resIng, resPromo, resRec, resOrd, resSet, resLogs] = await Promise.all([
-        api.get('/products').then((r) => r.data).catch(() => []),
+      const [resProd, resIng, resPromo, resRec, resOrd, resSet, resLogs, resUsers] = await Promise.all([
+        api.get('/admin/products').then((r) => r.data).catch(() => null),
         api.get('/ingredients').then((r) => r.data).catch(() => ({ ingredients: [] })),
         api.get('/promos?all=1').then((r) => r.data).catch(() => []),
         api.get('/recipes').then((r) => r.data).catch(() => ({ recipes: [] })),
         api.get('/orders').then((r) => r.data).catch(() => ({ orders: [] })),
         api.get('/settings').then((r) => r.data).catch(() => ({})),
         api.get('/inventory-logs').then((r) => r.data).catch(() => ({ logs: [] })),
+        api.get('/users').then((r) => r.data).catch(() => ({ users: [] })),
       ]);
 
-      const prodList = Array.isArray(resProd) ? resProd : [];
       const ingList = Array.isArray(resIng?.ingredients) ? resIng.ingredients : [];
-      setProducts(prodList);
+      setCatalogLoadError(!Array.isArray(resProd));
+      if (Array.isArray(resProd)) setProducts(resProd);
       setIngredients(ingList);
       setPromos(Array.isArray(resPromo) ? resPromo : []);
       setRecipes(Array.isArray(resRec?.recipes) ? resRec.recipes : []);
       setOrders(resOrd.orders || []);
+      setUsers(Array.isArray(resUsers?.users) ? resUsers.users : []);
       setInventoryLogs(resLogs.logs || []);
       setSettings(resSet || {});
 
       setSettingsForm({
         store_name: resSet?.store_name || 'VERSI KOPI',
-        tagline: resSet?.tagline || 'Secangkir cerita di setiap tegukan',
-        phone: resSet?.phone || '0812-3456-7890',
-        address: resSet?.address || 'Jl. Senja Raya No. 17, Bandung',
+        tagline: resSet?.tagline ?? '',
+        phone: resSet?.phone ?? '',
+        address: resSet?.address ?? '',
         tax_percent: String(resSet?.tax_percent ?? '0'),
         service_percent: String(resSet?.service_percent ?? '0'),
-        qris_merchant: resSet?.qris_merchant || 'Versi Kopi',
-        receipt_footer: resSet?.receipt_footer || 'Terima kasih telah berkunjung ke Versi Kopi',
+        qris_merchant: resSet?.qris_merchant ?? '',
+        receipt_footer: resSet?.receipt_footer ?? '',
       });
 
       if (ingList.length > 0 && !restockIngName) {
@@ -172,18 +204,22 @@ export default function Admin() {
   }, []);
 
   // statistik dan status stok
-  const totalRevenue = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
-  const totalOrders = orders.length;
+  const paidOrders = orders.filter((o) => (o.status || 'paid') !== 'void');
+  const totalRevenue = paidOrders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+  const totalOrders = paidOrders.length;
   const satuanProducts = products.filter((p) => (p.item_type || 'satuan') === 'satuan');
   const paketanProducts = products.filter((p) => p.item_type === 'paketan');
+  const activeProducts = products.filter((p) => Number(p.active) === 1);
+  const inactiveProducts = products.filter((p) => Number(p.active) !== 1);
 
   const lockedProducts = products.filter(
-    (p) => p.is_locked || Number(p.stock) <= 3 || Number(p.stock_percent ?? 100) <= 5
+    (p) => Number(p.active) === 1 && (p.is_locked || Number(p.stock) <= 3 || Number(p.stock_percent ?? 100) <= 5)
   );
   const warningProducts = products.filter(
     (p) =>
+      Number(p.active) === 1 &&
       !lockedProducts.some((lp) => lp.id === p.id) &&
-      (p.is_warning || Number(p.stock) <= 15 || Number(p.stock_percent ?? 100) <= 20)
+      Number(p.stock_percent ?? 100) <= 20
   );
   const alertIngredients = ingredients.filter((ing) => ing.is_locked || ing.is_warning);
 
@@ -199,17 +235,18 @@ export default function Admin() {
   });
 
   // filter daftar menu
-  const filteredAdminProducts = products.filter((p) => {
+  const visibleProducts = productStockFilter === 'inactive' ? inactiveProducts : activeProducts;
+  const filteredAdminProducts = visibleProducts.filter((p) => {
     const pType = p.item_type || 'satuan';
     const matchType = productTypeFilter === 'all' || pType === productTypeFilter;
-    const matchCat = productCategoryFilter === 'Semua' || p.category === productCategoryFilter;
+    const matchCat = productTypeFilter === 'paketan' || productCategoryFilter === 'Semua' || p.category === productCategoryFilter;
 
     const isLocked = p.is_locked || Number(p.stock) <= 3 || Number(p.stock_percent ?? 100) <= 5;
-    const isWarn = !isLocked && (p.is_warning || Number(p.stock) <= 15 || Number(p.stock_percent ?? 100) <= 20);
+    const isWarn = !isLocked && Number(p.stock_percent ?? 100) <= 20;
     const matchStock =
-      productStockFilter === 'all' ||
+      productStockFilter === 'all' || productStockFilter === 'inactive' ||
       (productStockFilter === 'locked' && isLocked) ||
-      (productStockFilter === 'warning' && (isWarn || isLocked));
+      (productStockFilter === 'warning' && isWarn);
 
     const q = productSearch.trim().toLowerCase();
     const matchSearch =
@@ -275,9 +312,9 @@ export default function Admin() {
     setNewProductPriceL(defaultType === 'paketan' ? 23000 : 18000);
     setNewProductDesc('');
     setNewProductGradient(GRADIENTS[0].value);
-    setNewProductImageUrl(
-      defaultType === 'paketan' ? '/products/paket-burger-kentang.jpg' : '/products/kopi-susu-versi.jpg'
-    );
+    setSavedProductPhoto(null);
+    setProductPhoto(null);
+    setProductPhotoError('');
     const firstTwo = satuanProducts.slice(0, 2);
     setNewProductBundleItems(
       firstTwo.length > 0
@@ -296,7 +333,9 @@ export default function Admin() {
     setNewProductPriceL(prod.price_l);
     setNewProductDesc(prod.description || '');
     setNewProductGradient(prod.gradient || GRADIENTS[0].value);
-    setNewProductImageUrl(getProductImage(prod) || PRODUCT_IMAGES_CATALOG[0].url);
+    setSavedProductPhoto(getProductImage(prod));
+    setProductPhoto(null);
+    setProductPhotoError('');
     setNewProductBundleItems(
       Array.isArray(prod.bundle_items) && prod.bundle_items.length > 0
         ? prod.bundle_items.map((b) => ({
@@ -364,20 +403,34 @@ export default function Admin() {
       price_l: Number(newProductPriceL),
       description: newProductDesc,
       gradient: newProductGradient,
-      image_url: newProductImageUrl,
     };
 
     try {
-      if (editingProductId) {
-        await api.put(`/products/${editingProductId}`, payload);
-        showNotice('Data menu berhasil diperbarui.');
+      const endpoint = editingProductId ? `/products/${editingProductId}` : '/products';
+      if (productPhoto) {
+        const form = new FormData();
+        const { bundle_items, ...fields } = payload;
+        Object.entries(fields).forEach(([key, value]) => form.set(key, value));
+        bundle_items.forEach((item, index) => {
+          form.set(`bundle_items[${index}][product_id]`, item.product_id);
+          form.set(`bundle_items[${index}][qty]`, item.qty);
+        });
+        if (editingProductId) form.set('_method', 'PUT');
+        form.set('photo', productPhoto.file);
+        await api.post(endpoint, form);
+      } else if (editingProductId) {
+        await api.put(endpoint, payload);
       } else {
-        await api.post('/products', payload);
-        showNotice('Menu baru berhasil ditambahkan. Stok otomatis mengikuti bahan baku gudang.');
+        await api.post(endpoint, payload);
       }
+      showNotice(editingProductId ? 'Data menu berhasil diperbarui.' : 'Menu baru berhasil ditambahkan.');
+      setProductPhoto(null);
       setIsProductModalOpen(false);
       loadData();
     } catch (err) {
+      if (err.response?.data?.errors?.photo) {
+        setProductPhotoError('Gunakan PNG, JPG, atau WebP, maksimal 2 MB dan 2400 × 2400 piksel.');
+      }
       const msg =
         err.response?.data?.message ||
         Object.values(err.response?.data?.errors || {})[0]?.[0] ||
@@ -388,14 +441,41 @@ export default function Admin() {
     }
   };
 
-  const handleDeleteProduct = async (prod) => {
-    if (!window.confirm(`Nonaktifkan menu "${prod.name}" dari daftar kasir?`)) return;
+  const closeProductModal = () => {
+    if (savingProduct) return;
+    setIsProductModalOpen(false);
+    setProductPhoto(null);
+  };
+
+  const handleProductPhoto = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 2 * 1024 * 1024) {
+      event.target.value = '';
+      setProductPhoto(null);
+      setProductPhotoError('Gunakan PNG, JPG, atau WebP, maksimal 2 MB.');
+      return;
+    }
+    setProductPhotoError('');
+    setProductPhoto({ file, url: URL.createObjectURL(file) });
+  };
+
+  const showMenuList = (status = 'all') => {
+    setProductTypeFilter('all');
+    setProductCategoryFilter('Semua');
+    setProductSearch('');
+    setProductStockFilter(status);
+  };
+
+  const handleProductStatus = async (prod) => {
+    const active = Number(prod.active) !== 1;
+    if (!active && !window.confirm(`Nonaktifkan menu "${prod.name}" dari daftar kasir?`)) return;
     try {
-      await api.delete(`/products/${prod.id}`);
-      showNotice(`Menu ${prod.name} telah dinonaktifkan.`);
-      loadData();
+      const { data } = await api.patch(`/products/${prod.id}/status`, { active });
+      setProducts((current) => current.map((p) => p.id === prod.id ? { ...p, active: Number(data.active) } : p));
+      showNotice(`Menu ${prod.name} telah ${active ? 'diaktifkan' : 'dinonaktifkan'}.`);
     } catch {
-      showNotice('Gagal menonaktifkan menu.', 'error');
+      showNotice('Gagal mengubah status menu.', 'error');
     }
   };
 
@@ -624,19 +704,162 @@ export default function Admin() {
     }
   };
 
+  // hapus bahan baku gudang
+  const handleDeleteIngredient = async (ing) => {
+    if (!window.confirm(`Hapus bahan "${ing.name}" dari gudang?`)) return;
+    try {
+      const { data } = await api.delete(`/ingredients/${ing.id}`);
+      showNotice(data.message || 'Bahan baku berhasil dihapus.');
+      loadData();
+    } catch (err) {
+      showNotice(err.response?.data?.message || 'Gagal menghapus bahan baku.', 'error');
+    }
+  };
+
+  // hapus menu permanen
+  const handleDeleteProduct = async (product) => {
+    if (!window.confirm(`Hapus permanen menu "${product.name}"? Resep menu ini juga akan ikut terhapus.`)) return;
+    try {
+      const { data } = await api.delete(`/products/${product.id}`);
+      showNotice(data.message || 'Menu berhasil dihapus.');
+      loadData();
+    } catch (err) {
+      showNotice(err.response?.data?.message || 'Gagal menghapus menu.', 'error');
+    }
+  };
+
+  // batalkan transaksi dan kembalikan stok
+  const handleVoidOrder = async (order) => {
+    if (!window.confirm(`Batalkan transaksi ${order.code}? Stok bahan baku akan dikembalikan ke gudang.`)) return;
+    try {
+      const { data } = await api.post(`/orders/${order.id}/void`);
+      showNotice(data.message || 'Transaksi berhasil dibatalkan.');
+      loadData();
+    } catch (err) {
+      showNotice(err.response?.data?.message || 'Gagal membatalkan transaksi.', 'error');
+    }
+  };
+
+  // export laporan transaksi ke csv
+  const handleExportOrdersCsv = () => {
+    if (filteredDashOrders.length === 0) {
+      showNotice('Belum ada data transaksi untuk diexport.', 'error');
+      return;
+    }
+    const headers = ['Kode Order', 'Waktu', 'Kasir', 'Metode', 'Status', 'Subtotal', 'Diskon', 'Total'];
+    const rows = filteredDashOrders.map((o) => [
+      o.code || '',
+      new Date(o.created_at).toLocaleString('id-ID'),
+      o.cashier_name || '',
+      (o.payment_method || '').toUpperCase(),
+      (o.status || 'paid').toUpperCase(),
+      Number(o.subtotal || 0),
+      Number(o.discount || 0),
+      Number(o.total || 0),
+    ]);
+    const csv = [headers, ...rows]
+      .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `laporan-versikopi-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // kelola akun kasir dan admin
+  const resetUserForm = () => {
+    setEditingUserId(null);
+    setUserFormName('');
+    setUserFormEmail('');
+    setUserFormPassword('');
+    setUserFormRole('kasir');
+  };
+
+  const handleSaveUser = async (e) => {
+    e.preventDefault();
+    setSavingUser(true);
+    try {
+      const payload = {
+        name: userFormName,
+        email: userFormEmail,
+        role: userFormRole,
+        ...(userFormPassword ? { password: userFormPassword } : {}),
+      };
+      if (editingUserId) {
+        const { data } = await api.put(`/users/${editingUserId}`, payload);
+        showNotice(data.message || 'Akun berhasil diperbarui.');
+      } else {
+        const { data } = await api.post('/users', payload);
+        showNotice(data.message || 'Akun berhasil ditambahkan.');
+      }
+      resetUserForm();
+      loadData();
+    } catch (err) {
+      const firstErr = Object.values(err.response?.data?.errors || {})[0]?.[0];
+      showNotice(firstErr || err.response?.data?.message || 'Gagal menyimpan akun.', 'error');
+    } finally {
+      setSavingUser(false);
+    }
+  };
+
+  const handleDeleteUser = async (u) => {
+    if (!window.confirm(`Hapus akun "${u.name}" (${u.email})?`)) return;
+    try {
+      const { data } = await api.delete(`/users/${u.id}`);
+      showNotice(data.message || 'Akun berhasil dihapus.');
+      loadData();
+    } catch (err) {
+      showNotice(err.response?.data?.message || 'Gagal menghapus akun.', 'error');
+    }
+  };
+
+  const handleSelectLogo = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 1024 * 1024) {
+      e.target.value = '';
+      setLogoDraft(null);
+      showNotice('Pilih logo PNG, JPG, atau WebP dengan ukuran maksimal 1 MB.', 'error');
+      return;
+    }
+    setRemoveLogo(false);
+    setLogoDraft({ file, url: URL.createObjectURL(file) });
+  };
+
   const handleSaveSettings = async (e) => {
     e.preventDefault();
     setSavingSettings(true);
     try {
-      await api.put('/settings', {
+      const payload = {
         ...settingsForm,
         tax_percent: Number(settingsForm.tax_percent || 0),
         service_percent: Number(settingsForm.service_percent || 0),
-      });
+        remove_logo: removeLogo,
+      };
+      let result;
+      if (logoDraft) {
+        const form = new FormData();
+        form.set('_method', 'PUT');
+        Object.entries(payload).forEach(([key, value]) => {
+          form.set(key, key === 'remove_logo' ? '0' : value);
+        });
+        form.set('logo', logoDraft.file);
+        result = await api.post('/settings', form);
+      } else {
+        result = await api.put('/settings', payload);
+      }
+      setSettings(result.data.settings);
+      setLogoDraft(null);
+      setRemoveLogo(false);
+      if (logoInput.current) logoInput.current.value = '';
       showNotice('Pengaturan toko berhasil disimpan.');
-      loadData();
     } catch (err) {
-      const msg = err.response?.data?.message || 'Gagal menyimpan pengaturan toko.';
+      const msg = err.response?.data?.errors?.logo
+        ? 'Logo harus berupa PNG, JPG, atau WebP, maksimal 1 MB dan 1600 × 1600 piksel.'
+        : err.response?.data?.message || 'Gagal menyimpan pengaturan toko.';
       showNotice(msg, 'error');
     } finally {
       setSavingSettings(false);
@@ -706,7 +929,7 @@ export default function Admin() {
 
           {warningProducts.length > 0 && (
             <div className="stock-alert-group warning">
-              <span className="stock-alert-label">Menu Peringatan Menipis (≤ 20% atau ≤ 15 porsi)</span>
+              <span className="stock-alert-label">Menu Peringatan Menipis (≤ 20%)</span>
               <div className="stock-alert-pills">
                 {warningProducts.map((p) => (
                   <span key={p.id} className="stock-alert-pill is-warning">
@@ -728,7 +951,7 @@ export default function Admin() {
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="logo-ring small">
-            <img src={logo} alt="Logo" />
+            <img src={savedLogo} alt="" />
           </div>
           <div className="sidebar-brand-text">
             <strong>{settings.store_name || 'VERSI KOPI'}</strong>
@@ -795,6 +1018,17 @@ export default function Admin() {
           </button>
           <button
             type="button"
+            className={`nav-item ${activeTab === 'users' ? 'active' : ''}`}
+            onClick={() => setActiveTab('users')}
+          >
+            <span className="nav-icon">
+              <IconReceipt size={18} />
+            </span>
+            <span>Kelola Akun</span>
+            <span className="nav-badge">{users.length}</span>
+          </button>
+          <button
+            type="button"
             className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
             onClick={() => setActiveTab('settings')}
           >
@@ -826,18 +1060,11 @@ export default function Admin() {
                 ? 'Resep & Takaran'
                 : activeTab === 'restock'
                 ? 'Stok Bahan Baku'
+                : activeTab === 'users'
+                ? 'Kelola Akun'
                 : 'Pengaturan Toko'}
             </h1>
-            <p>Stok bahan baku</p>
-          </div>
-          <div className="topbar-actions">
-            <div className="user-chip">
-              <div className="avatar">{(user?.name || 'A').charAt(0).toUpperCase()}</div>
-              <div className="user-chip-text">
-                <strong>{user?.name || 'Admin'}</strong>
-                <small>Owner Kedai</small>
-              </div>
-            </div>
+            {activeTab !== 'products' && <p>Stok bahan baku</p>}
           </div>
         </header>
 
@@ -919,8 +1146,8 @@ export default function Admin() {
                     <h3>Transaksi Kasir Terbaru</h3>
                     <p>Cari atau pantau catatan penjualan yang masuk ke sistem</p>
                   </div>
-                  <div className="head-action" style={{ minWidth: '260px' }}>
-                    <div className="search-box">
+                  <div className="head-action" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <div className="search-box" style={{ minWidth: '240px' }}>
                       <IconSearch size={16} />
                       <input
                         type="text"
@@ -934,6 +1161,9 @@ export default function Admin() {
                         </button>
                       )}
                     </div>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={handleExportOrdersCsv}>
+                      Export CSV
+                    </button>
                   </div>
                 </div>
                 <div className="recent-orders">
@@ -943,16 +1173,32 @@ export default function Admin() {
                       <p>Belum ada data transaksi yang cocok dengan pencarian.</p>
                     </div>
                   ) : (
-                    filteredDashOrders.slice(0, 12).map((o) => (
-                      <div key={o.id} className="recent-order">
-                        <span className="ro-code">{o.code}</span>
-                        <span className="ro-time">{new Date(o.created_at).toLocaleString('id-ID')}</span>
-                        <span className={`method-chip ${o.payment_method === 'cash' ? 'method-cash' : 'method-qris'}`}>
-                          {o.payment_method?.toUpperCase()}
-                        </span>
-                        <span className="ro-total">Rp {Number(o.total).toLocaleString('id-ID')}</span>
-                      </div>
-                    ))
+                    filteredDashOrders.slice(0, 12).map((o) => {
+                      const isVoid = (o.status || 'paid') === 'void';
+                      return (
+                        <div key={o.id} className="recent-order" style={isVoid ? { opacity: 0.6 } : undefined}>
+                          <span className="ro-code">
+                            {o.code} {isVoid && <span className="badge badge-red">VOID</span>}
+                          </span>
+                          <span className="ro-time">{new Date(o.created_at).toLocaleString('id-ID')}</span>
+                          <span className={`method-chip ${o.payment_method === 'cash' ? 'method-cash' : 'method-qris'}`}>
+                            {o.payment_method?.toUpperCase()}
+                          </span>
+                          <span className="ro-total" style={isVoid ? { textDecoration: 'line-through' } : undefined}>
+                            Rp {Number(o.total).toLocaleString('id-ID')}
+                          </span>
+                          {!isVoid && (
+                            <button
+                              type="button"
+                              className="btn btn-danger btn-sm"
+                              onClick={() => handleVoidOrder(o)}
+                            >
+                              Void
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -962,12 +1208,9 @@ export default function Admin() {
           {/* kelola menu satuan dan paketan */}
           {activeTab === 'products' && (
             <div>
-              {renderStockAlertBanner()}
-
               <div className="section-head">
                 <div>
                   <h2>Daftar Menu Satuan & Paketan</h2>
-                  <p>Stok bahan baku</p>
                 </div>
                 <div className="head-action" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                   <button
@@ -994,10 +1237,10 @@ export default function Admin() {
                     <button
                       type="button"
                       className={`pos-seg-btn ${productTypeFilter === 'all' ? 'active' : ''}`}
-                      onClick={() => setProductTypeFilter('all')}
+                      onClick={() => showMenuList()}
                     >
                       <span>Semua Menu</span>
-                      <em className="pos-seg-count">{products.length}</em>
+                      <em className="pos-seg-count">{visibleProducts.length}</em>
                     </button>
                     <button
                       type="button"
@@ -1006,7 +1249,7 @@ export default function Admin() {
                     >
                       <IconCup size={15} />
                       <span>Menu Satuan</span>
-                      <em className="pos-seg-count">{satuanProducts.length}</em>
+                      <em className="pos-seg-count">{visibleProducts.filter((p) => (p.item_type || 'satuan') === 'satuan').length}</em>
                     </button>
                     <button
                       type="button"
@@ -1015,7 +1258,7 @@ export default function Admin() {
                     >
                       <IconLayers size={15} />
                       <span>Menu Paketan</span>
-                      <em className="pos-seg-count">{paketanProducts.length}</em>
+                      <em className="pos-seg-count">{visibleProducts.filter((p) => p.item_type === 'paketan').length}</em>
                     </button>
                   </div>
 
@@ -1036,22 +1279,30 @@ export default function Admin() {
                 </div>
 
                 <div className="pos-cat-strip">
-                  {['Semua', ...CATEGORIES].map((cat) => (
+                  {productTypeFilter !== 'paketan' && getMenuCategories(products).map((cat) => (
                     <button
                       key={cat}
                       type="button"
                       className={`pos-cat-pill ${productCategoryFilter === cat ? 'active' : ''}`}
                       onClick={() => setProductCategoryFilter(cat)}
                     >
-                      {cat}
+                      {cat === 'Semua' ? 'Semua Kategori' : cat}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    className={`pos-cat-pill ${productStockFilter === 'inactive' ? 'active' : ''}`}
+                    aria-pressed={productStockFilter === 'inactive'}
+                    onClick={() => showMenuList(productStockFilter === 'inactive' ? 'all' : 'inactive')}
+                  >
+                    Menu Nonaktif ({inactiveProducts.length})
+                  </button>
                   <button
                     type="button"
                     className={`pos-cat-pill ${productStockFilter === 'warning' ? 'active' : ''}`}
                     onClick={() => setProductStockFilter((prev) => (prev === 'warning' ? 'all' : 'warning'))}
                   >
-                    Menipis ≤20% ({warningProducts.length + lockedProducts.length})
+                    Menipis ≤20% ({warningProducts.length})
                   </button>
                   <button
                     type="button"
@@ -1063,11 +1314,19 @@ export default function Admin() {
                 </div>
               </div>
 
-              {filteredAdminProducts.length === 0 ? (
+              {catalogLoadError && (
+                <div className="card card-pad" role="alert">
+                  <p>Daftar menu gagal dimuat.</p>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={loadData}>Coba Lagi</button>
+                </div>
+              )}
+              {loading ? (
+                <p>Memuat daftar menu...</p>
+              ) : !catalogLoadError && filteredAdminProducts.length === 0 ? (
                 <div className="card card-pad">
                   <div className="empty">
-                    <strong>Menu Tidak Ditemukan</strong>
-                    <p>Coba ubah kata kunci pencarian atau filter di atas.</p>
+                    <strong>{productStockFilter === 'inactive' && inactiveProducts.length === 0 ? 'Tidak Ada Menu Nonaktif' : 'Menu Tidak Ditemukan'}</strong>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => showMenuList()}>Lihat Semua Menu</button>
                   </div>
                 </div>
               ) : (
@@ -1076,7 +1335,7 @@ export default function Admin() {
                     const hasRecipe = recipes.some((r) => Number(r.product_id) === Number(p.id));
                     const pct = Number(p.stock_percent ?? 100);
                     const isLocked = Boolean(p.is_locked || p.stock <= 3 || pct <= 5);
-                    const isWarning = !isLocked && Boolean(p.is_warning || p.stock <= 15 || pct <= 20);
+                    const isWarning = !isLocked && pct <= 20;
 
                     return (
                       <div
@@ -1106,13 +1365,13 @@ export default function Admin() {
                               </span>
                               <span
                                 className={`badge ${
-                                  isLocked ? 'badge-red' : isWarning ? 'badge-amber' : 'badge-green'
+                                  Number(p.active) !== 1 ? '' : isLocked ? 'badge-red' : isWarning ? 'badge-amber' : 'badge-green'
                                 }`}
                               >
-                                {isLocked
+                                {Number(p.active) !== 1 ? 'Nonaktif' : isLocked
                                   ? 'Terkunci (≤5% / ≤3)'
                                   : isWarning
-                                  ? 'Menipis (≤20% / ≤15)'
+                                  ? 'Menipis (≤20%)'
                                   : 'Stok Bahan Aman'}
                               </span>
                             </div>
@@ -1171,7 +1430,7 @@ export default function Admin() {
                             </button>
                           )}
 
-                          <div className="admin-menu-actions">
+                          <div className="admin-menu-actions" style={{ flexWrap: 'wrap' }}>
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
@@ -1181,10 +1440,17 @@ export default function Admin() {
                             </button>
                             <button
                               type="button"
+                              className="btn btn-soft btn-sm"
+                              onClick={() => handleProductStatus(p)}
+                            >
+                              {Number(p.active) === 1 ? 'Nonaktifkan' : 'Aktifkan'}
+                            </button>
+                            <button
+                              type="button"
                               className="btn btn-danger btn-sm"
                               onClick={() => handleDeleteProduct(p)}
                             >
-                              Nonaktifkan
+                              Hapus
                             </button>
                           </div>
                         </div>
@@ -1660,10 +1926,11 @@ export default function Admin() {
                                 />
                               </div>
 
-                              <div style={{ display: 'flex', gap: '8px', marginTop: 'auto', paddingTop: '6px' }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: 'auto', paddingTop: '8px' }}>
                                 <button
                                   type="button"
                                   className="btn btn-soft btn-sm"
+                                  style={{ justifyContent: 'center', whiteSpace: 'nowrap' }}
                                   onClick={() => {
                                     setRestockActionMode('add');
                                     setRestockIngName(ing.name);
@@ -1676,6 +1943,7 @@ export default function Admin() {
                                 <button
                                   type="button"
                                   className="btn btn-secondary btn-sm"
+                                  style={{ justifyContent: 'center', whiteSpace: 'nowrap' }}
                                   onClick={() => {
                                     setRestockActionMode('set');
                                     setRestockIngName(ing.name);
@@ -1685,6 +1953,14 @@ export default function Admin() {
                                   }}
                                 >
                                   Atur 100%
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-danger btn-sm"
+                                  style={{ gridColumn: '1 / -1', justifyContent: 'center' }}
+                                  onClick={() => handleDeleteIngredient(ing)}
+                                >
+                                  Hapus Bahan
                                 </button>
                               </div>
                             </div>
@@ -1777,7 +2053,32 @@ export default function Admin() {
             <div className="settings-grid">
               <form className="settings-card" onSubmit={handleSaveSettings}>
                 <div className="settings-section">
-                  <h4>Identitas & Kontak Kedai</h4>
+                  <h4>Identitas & Kontak Usaha</h4>
+                  <div className="settings-logo">
+                    <img src={previewLogo} alt="Pratinjau logo toko" />
+                    <div>
+                      <label className="field">
+                        <span className="field-label">Logo Toko</span>
+                        <input ref={logoInput} className="input" type="file" accept="image/png,image/jpeg,image/webp"
+                          onChange={handleSelectLogo} disabled={savingSettings} aria-describedby="store-logo-help" />
+                      </label>
+                      <small id="store-logo-help">PNG, JPG, atau WebP. Maksimal 1 MB dan 1600 × 1600 piksel.</small>
+                      {(logoDraft || settings.logo_version) && !removeLogo && (
+                        <button type="button" className="btn btn-secondary btn-sm" disabled={savingSettings} onClick={() => {
+                          setRemoveLogo(!logoDraft);
+                          setLogoDraft(null);
+                          if (logoInput.current) logoInput.current.value = '';
+                        }}>
+                          {logoDraft ? 'Batalkan Pilihan' : 'Gunakan Logo Bawaan'}
+                        </button>
+                      )}
+                      {removeLogo && (
+                        <button type="button" className="btn btn-secondary btn-sm" disabled={savingSettings} onClick={() => setRemoveLogo(false)}>
+                          Batalkan Penghapusan
+                        </button>
+                      )}
+                    </div>
+                  </div>
                   <div className="form-grid">
                     <label className="field">
                       <span className="field-label">Nama Toko</span>
@@ -1872,6 +2173,14 @@ export default function Admin() {
                     </button>
                   </div>
                 </div>
+                <div className="settings-section">
+                  <h4>Katalog Produk</h4>
+                  <div>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setActiveTab('products')}>
+                      Buka Kelola Produk
+                    </button>
+                  </div>
+                </div>
               </form>
 
               <div className="settings-card">
@@ -1892,7 +2201,7 @@ export default function Admin() {
                     }}
                   >
                     <div className="receipt-center">
-                      <img src={logo} alt="Logo" className="receipt-logo" />
+                      <img src={receiptLogo} alt="" className="receipt-logo" />
                       <h4>{settingsForm.store_name || 'VERSI KOPI'}</h4>
                       <div className="rc-sub">{settingsForm.tagline}</div>
                       <div className="rc-sub">{settingsForm.address}</div>
@@ -1914,9 +2223,134 @@ export default function Admin() {
                     </div>
                     <div className="dashed"></div>
                     <div className="receipt-foot">
-                      {settingsForm.receipt_footer || 'Terima kasih telah berkunjung ke Versi Kopi'}
+                      {settingsForm.receipt_footer || 'Terima kasih telah berkunjung'}
                     </div>
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* kelola akun kasir dan admin */}
+          {activeTab === 'users' && (
+            <div className="restock-layout">
+              <div className="card restock-form">
+                <div className="card-head">
+                  <div>
+                    <h3>{editingUserId ? 'Ubah Akun' : 'Tambah Akun Baru'}</h3>
+                    <p>Kelola akun login Kasir dan Admin</p>
+                  </div>
+                </div>
+                <div className="card-pad">
+                  <form onSubmit={handleSaveUser}>
+                    <label className="field">
+                      <span className="field-label">Nama Lengkap</span>
+                      <input
+                        type="text"
+                        required
+                        maxLength={100}
+                        className="input"
+                        placeholder="Contoh: Kasir Shift Sore"
+                        value={userFormName}
+                        onChange={(e) => setUserFormName(e.target.value)}
+                      />
+                    </label>
+                    <label className="field" style={{ marginTop: '14px' }}>
+                      <span className="field-label">Email Login</span>
+                      <input
+                        type="email"
+                        required
+                        maxLength={190}
+                        className="input"
+                        placeholder="kasir2@versikopi.test"
+                        value={userFormEmail}
+                        onChange={(e) => setUserFormEmail(e.target.value)}
+                      />
+                    </label>
+                    <label className="field" style={{ marginTop: '14px' }}>
+                      <span className="field-label">
+                        {editingUserId ? 'Password Baru (kosongkan jika tetap)' : 'Password (min. 6 karakter)'}
+                      </span>
+                      <input
+                        type="password"
+                        required={!editingUserId}
+                        minLength={6}
+                        className="input"
+                        placeholder="••••••••"
+                        value={userFormPassword}
+                        onChange={(e) => setUserFormPassword(e.target.value)}
+                      />
+                    </label>
+                    <label className="field" style={{ marginTop: '14px' }}>
+                      <span className="field-label">Peran (Role)</span>
+                      <select
+                        className="select"
+                        value={userFormRole}
+                        onChange={(e) => setUserFormRole(e.target.value)}
+                      >
+                        <option value="kasir">Kasir</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                    </label>
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
+                      <button type="submit" disabled={savingUser} className="btn btn-primary" style={{ flex: 1 }}>
+                        {savingUser ? 'Menyimpan...' : editingUserId ? 'Simpan Perubahan' : '+ Tambah Akun'}
+                      </button>
+                      {editingUserId && (
+                        <button type="button" className="btn btn-secondary" onClick={resetUserForm}>
+                          Batal
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-head">
+                  <div>
+                    <h3>Daftar Akun Aktif</h3>
+                    <p>{users.length} akun terdaftar di sistem</p>
+                  </div>
+                </div>
+                <div className="recent-orders">
+                  {users.length === 0 ? (
+                    <div className="empty">
+                      <strong>Belum Ada Akun</strong>
+                    </div>
+                  ) : (
+                    users.map((u) => (
+                      <div key={u.id} className="recent-order">
+                        <span className="ro-code">{u.name}</span>
+                        <span className="ro-time">{u.email}</span>
+                        <span className={`badge ${u.role === 'admin' ? 'badge-amber' : 'badge-green'}`}>
+                          {u.role?.toUpperCase()}
+                        </span>
+                        <div style={{ display: 'flex', gap: '8px', marginLeft: 'auto' }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => {
+                              setEditingUserId(u.id);
+                              setUserFormName(u.name || '');
+                              setUserFormEmail(u.email || '');
+                              setUserFormPassword('');
+                              setUserFormRole(u.role || 'kasir');
+                            }}
+                          >
+                            Ubah
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-sm"
+                            onClick={() => handleDeleteUser(u)}
+                          >
+                            Hapus
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             </div>
@@ -2033,14 +2467,13 @@ export default function Admin() {
 
       {/* modal menu */}
       {isProductModalOpen && (
-        <div className="modal-backdrop" onClick={() => setIsProductModalOpen(false)}>
-          <div className="modal-sheet modal-lg" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-backdrop" onClick={closeProductModal}>
+          <div className="modal-sheet modal-lg product-editor" role="dialog" aria-modal="true" aria-labelledby="product-editor-title" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <div>
-                <h3>{editingProductId ? 'Ubah Data Menu' : 'Tambah Menu Baru'}</h3>
-                <p>Stok bahan baku</p>
+                <h3 id="product-editor-title">{editingProductId ? 'Ubah Data Menu' : 'Tambah Menu Baru'}</h3>
               </div>
-              <button type="button" className="modal-close" onClick={() => setIsProductModalOpen(false)}>
+              <button type="button" className="modal-close" aria-label="Tutup" onClick={closeProductModal}>
                 ✕
               </button>
             </div>
@@ -2191,31 +2624,15 @@ export default function Admin() {
                   </label>
 
                   <div className="field span-2">
-                    <span className="field-label">Foto Produk (Bagian Produk Saja)</span>
-                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                      <img
-                        src={newProductImageUrl}
-                        alt="Preview"
-                        style={{
-                          width: '56px',
-                          height: '56px',
-                          borderRadius: '12px',
-                          objectFit: 'cover',
-                          border: '1px solid var(--line-strong)',
-                          flexShrink: 0,
-                        }}
-                      />
-                      <select
-                        className="select"
-                        value={newProductImageUrl}
-                        onChange={(e) => setNewProductImageUrl(e.target.value)}
-                      >
-                        {PRODUCT_IMAGES_CATALOG.map((img) => (
-                          <option key={img.url} value={img.url}>
-                            {img.label}
-                          </option>
-                        ))}
-                      </select>
+                    <label className="field-label" htmlFor="product-photo">Foto Produk</label>
+                    <div className="product-photo-field">
+                      {(productPhotoPreview || savedProductPhoto) && <img src={productPhotoPreview || savedProductPhoto} alt="Pratinjau foto produk" />}
+                      <div className="product-photo-input">
+                        <input id="product-photo" className="input" type="file" accept="image/png,image/jpeg,image/webp"
+                          aria-describedby="product-photo-help" disabled={savingProduct} onChange={handleProductPhoto} />
+                        <small id="product-photo-help">PNG, JPG, atau WebP. Maksimal 2 MB dan 2400 × 2400 piksel.</small>
+                        {productPhotoError && <small role="alert" className="product-photo-error">{productPhotoError}</small>}
+                      </div>
                     </div>
                   </div>
 
@@ -2240,7 +2657,7 @@ export default function Admin() {
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  onClick={() => setIsProductModalOpen(false)}
+                  onClick={closeProductModal}
                 >
                   Batal
                 </button>
