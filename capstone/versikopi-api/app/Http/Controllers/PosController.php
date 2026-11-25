@@ -2,20 +2,23 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Database\Schema\Blueprint;
+use App\Services\InventoryCalculator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class PosController extends Controller
 {
     private const ALLOWED_CATEGORIES = ['Signature', 'Coffee', 'Non-Coffee', 'Pastry', 'Snack', 'Bundling'];
+
     private const ALLOWED_SUGAR = ['100%', '75%', '50%', '25%', '0%'];
+
     private const ALLOWED_UNITS = ['ml', 'gr', 'shot', 'pump', 'pcs', 'sdm', 'sdt'];
+
     private const ALLOWED_SETTINGS = [
         'store_name',
         'tagline',
@@ -36,882 +39,27 @@ class PosController extends Controller
             return '';
         }
         $cleaned = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', strip_tags($value));
+
         return mb_substr(trim((string) $cleaned), 0, $maxLength);
     }
 
-    private function ensureExtendedSchema(): void
+    private function cleanName(string $name): string
     {
-        // cek tabel pengaturan
-        if (! Schema::hasTable('settings')) {
-            Schema::create('settings', function (Blueprint $table) {
-                $table->id();
-                $table->string('key')->unique();
-                $table->text('value')->nullable();
-                $table->timestamps();
-            });
-        }
-
-        // cek tabel produk
-        if (! Schema::hasTable('products')) {
-            Schema::create('products', function (Blueprint $table) {
-                $table->id();
-                $table->string('name');
-                $table->string('category');
-                $table->string('item_type')->default('satuan');
-                $table->text('description')->nullable();
-                $table->text('bundle_items')->nullable();
-                $table->integer('price_m')->default(0);
-                $table->integer('price_l')->default(0);
-                $table->integer('stock')->default(60);
-                $table->integer('max_stock')->default(60);
-                $table->string('emoji')->nullable();
-                $table->string('gradient')->nullable();
-                $table->string('image_url')->nullable();
-                $table->boolean('active')->default(true);
-                $table->timestamps();
-            });
-        } else {
-            Schema::table('products', function (Blueprint $table) {
-                if (! Schema::hasColumn('products', 'max_stock')) {
-                    $table->integer('max_stock')->default(60)->after('stock');
-                }
-                if (! Schema::hasColumn('products', 'item_type')) {
-                    $table->string('item_type')->default('satuan')->after('category');
-                }
-                if (! Schema::hasColumn('products', 'bundle_items')) {
-                    $table->text('bundle_items')->nullable()->after('description');
-                }
-                if (! Schema::hasColumn('products', 'image_url')) {
-                    $table->string('image_url')->nullable()->after('gradient');
-                }
-            });
-
-            // sinkronisasi kapasitas awal
-            DB::statement('UPDATE products SET max_stock = CASE WHEN stock > 60 THEN stock ELSE 60 END WHERE max_stock IS NULL OR max_stock <= 0');
-        }
-
-        // cek tabel promo
-        if (! Schema::hasTable('promos')) {
-            Schema::create('promos', function (Blueprint $table) {
-                $table->id();
-                $table->string('code')->unique();
-                $table->string('type')->default('percent');
-                $table->integer('value')->default(0);
-                $table->integer('min_subtotal')->default(0);
-                $table->integer('max_discount')->default(0);
-                $table->boolean('active')->default(true);
-                $table->timestamps();
-            });
-        }
-
-        // cek tabel transaksi
-        if (! Schema::hasTable('orders')) {
-            Schema::create('orders', function (Blueprint $table) {
-                $table->id();
-                $table->string('code')->unique();
-                $table->string('cashier_name')->nullable();
-                $table->string('customer_name')->nullable();
-                $table->string('order_type')->default('dine_in');
-                $table->string('table_number')->nullable();
-                $table->longText('items');
-                $table->integer('subtotal')->default(0);
-                $table->string('promo_code')->nullable();
-                $table->integer('discount')->default(0);
-                $table->integer('tax')->default(0);
-                $table->integer('service')->default(0);
-                $table->integer('total')->default(0);
-                $table->string('payment_method')->default('cash');
-                $table->integer('cash_received')->default(0);
-                $table->integer('change_amount')->default(0);
-                $table->string('status')->default('paid');
-                $table->timestamps();
-            });
-        } else {
-            Schema::table('orders', function (Blueprint $table) {
-                if (! Schema::hasColumn('orders', 'customer_name')) {
-                    $table->string('customer_name')->nullable()->after('cashier_name');
-                }
-                if (! Schema::hasColumn('orders', 'order_type')) {
-                    $table->string('order_type')->default('dine_in')->after('customer_name');
-                }
-                if (! Schema::hasColumn('orders', 'table_number')) {
-                    $table->string('table_number')->nullable()->after('order_type');
-                }
-                if (! Schema::hasColumn('orders', 'status')) {
-                    $table->string('status')->default('paid')->after('change_amount');
-                }
-            });
-        }
-
-        // cek tabel riwayat mutasi stok
-        if (! Schema::hasTable('inventory_logs')) {
-            Schema::create('inventory_logs', function (Blueprint $table) {
-                $table->id();
-                $table->unsignedBigInteger('product_id')->nullable();
-                $table->string('product_name');
-                $table->string('type')->default('in');
-                $table->string('qty');
-                $table->string('stock_after')->nullable();
-                $table->string('note')->nullable();
-                $table->string('reference')->nullable();
-                $table->string('actor_name')->nullable();
-                $table->timestamps();
-            });
-        }
-
-        // cek tabel stok bahan
-        if (! Schema::hasTable('ingredients_stock')) {
-            Schema::create('ingredients_stock', function (Blueprint $table) {
-                $table->id();
-                $table->string('name')->unique();
-                $table->string('unit')->default('ml');
-                $table->float('current_stock')->default(0);
-                $table->float('max_stock')->default(1000);
-                $table->timestamps();
-            });
-        }
-
-        // cek tabel resep
-        if (! Schema::hasTable('recipes')) {
-            Schema::create('recipes', function (Blueprint $table) {
-                $table->id();
-                $table->unsignedBigInteger('product_id')->unique();
-                $table->string('prep_time')->default('2 Menit');
-                $table->longText('ingredients');
-                $table->text('steps')->nullable();
-                $table->string('barista_note')->nullable();
-                $table->timestamps();
-            });
-        }
-
-        // sinkronisasi daftar menu dan harga resmi versi kopi
-        $catalogVersion = DB::table('settings')->where('key', 'catalog_version')->value('value');
-        if ($catalogVersion !== 'versikopi-official-v2') {
-            $this->syncOfficialVersiKopiCatalog();
-        }
+        return preg_replace('/\s+/u', ' ', $this->cleanText($name, 120));
     }
 
-    // sinkronisasi katalog menu resmi versi kopi beserta foto dan resep
-    private function syncOfficialVersiKopiCatalog(): void
+    private function namedRecord(string $table, string $name, ?int $exceptId = null): ?object
     {
-        $officialSettings = [
-            'store_name'      => 'VERSI KOPI',
-            'tagline'         => 'Bukan mood booster, ini mood reset',
-            'address'         => 'Jl. Inpres XI No.34, RT.005/RW.008, Larangan Utara, Kec. Larangan, Kota Tangerang, Banten',
-            'phone'           => '089612993256',
-            'receipt_footer'  => 'Terima kasih telah berkunjung ke Versi Kopi (@Versi_Kopi)',
-            'custom_note'     => 'Buka Setiap Hari 13.00 - 23.15 WIB | @Versi_Kopi',
-            'qris_merchant'   => 'Versi Kopi',
-            'catalog_version' => 'versikopi-official-v2',
-        ];
-        foreach ($officialSettings as $k => $v) {
-            DB::table('settings')->updateOrInsert(
-                ['key' => $k],
-                ['value' => $v, 'updated_at' => now(), 'created_at' => now()]
-            );
-        }
+        $key = mb_strtolower($this->cleanName($name));
 
-        $officialIngredients = [
-            ['name' => 'Espresso House Blend', 'unit' => 'ml', 'current_stock' => 3000, 'max_stock' => 3000],
-            ['name' => 'Susu Segar Pasteurisasi', 'unit' => 'ml', 'current_stock' => 9000, 'max_stock' => 9000],
-            ['name' => 'Sirup Gula Aren Organik', 'unit' => 'ml', 'current_stock' => 2500, 'max_stock' => 2500],
-            ['name' => 'Sirup Karamel & Butterscotch', 'unit' => 'ml', 'current_stock' => 2000, 'max_stock' => 2000],
-            ['name' => 'Sirup Buah & Varian Rasa', 'unit' => 'ml', 'current_stock' => 2000, 'max_stock' => 2000],
-            ['name' => 'Simple Syrup', 'unit' => 'ml', 'current_stock' => 2000, 'max_stock' => 2000],
-            ['name' => 'Bubuk Pure Matcha Jepang', 'unit' => 'gr', 'current_stock' => 500, 'max_stock' => 500],
-            ['name' => 'Seduhan Teh Hitam', 'unit' => 'ml', 'current_stock' => 6000, 'max_stock' => 6000],
-            ['name' => 'Air Mineral', 'unit' => 'ml', 'current_stock' => 9000, 'max_stock' => 9000],
-            ['name' => 'Es Batu Kristal', 'unit' => 'gr', 'current_stock' => 10000, 'max_stock' => 10000],
-            ['name' => 'Kentang & Bumbu Snack', 'unit' => 'gr', 'current_stock' => 5000, 'max_stock' => 5000],
-            ['name' => 'Roti Bun & Patty Burger', 'unit' => 'gr', 'current_stock' => 4200, 'max_stock' => 4200],
-            ['name' => 'Bahan Cireng & Dimsum', 'unit' => 'gr', 'current_stock' => 4000, 'max_stock' => 4000],
-        ];
-
-        DB::table('ingredients_stock')->delete();
-        foreach ($officialIngredients as $ing) {
-            DB::table('ingredients_stock')->insert(array_merge($ing, [
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]));
-        }
-
-        // daftar menu satuan resmi dari daftar harga dan foto produk
-        $satuanMenus = [
-            // Signature & Coffee
-            [
-                'name'        => 'Kopi Susu Versi (Aren Smooth)',
-                'category'    => 'Signature',
-                'description' => 'Signature blend, creamy & balanced dengan gula aren lembut.',
-                'price_m'     => 15000,
-                'price_l'     => 18000,
-                'gradient'    => '#D8B493,#A67C58',
-                'image_url'   => '/products/kopi-susu-versi.jpg',
-                'prep_time'   => '2 Menit',
-                'ingredients' => [
-                    ['name' => 'Espresso House Blend', 'amount_m' => '30', 'amount_l' => '45', 'unit' => 'ml'],
-                    ['name' => 'Susu Segar Pasteurisasi', 'amount_m' => '120', 'amount_l' => '160', 'unit' => 'ml'],
-                    ['name' => 'Sirup Gula Aren Organik', 'amount_m' => '25', 'amount_l' => '35', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Tuang sirup gula aren di dasar cup.\n2. Masukkan es batu dan susu segar dingin.\n3. Tuang shot espresso di bagian atas.",
-                'note'        => 'Aduk sebelum diminum untuk rasa manis legit yang merata.',
-            ],
-            [
-                'name'        => 'Kopi Susu Temu (Aren Temu)',
-                'category'    => 'Signature',
-                'description' => 'Earthy taste, unique & fresh perpaduan espresso dan rempah gula aren.',
-                'price_m'     => 14000,
-                'price_l'     => 17000,
-                'gradient'    => '#C4A484,#8A684C',
-                'image_url'   => '/products/aren-temu.jpg',
-                'prep_time'   => '2 Menit',
-                'ingredients' => [
-                    ['name' => 'Espresso House Blend', 'amount_m' => '30', 'amount_l' => '45', 'unit' => 'ml'],
-                    ['name' => 'Susu Segar Pasteurisasi', 'amount_m' => '120', 'amount_l' => '160', 'unit' => 'ml'],
-                    ['name' => 'Sirup Gula Aren Organik', 'amount_m' => '25', 'amount_l' => '35', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Siapkan sirup gula aren khas Temu di dasar cup.\n2. Tambahkan es batu dan susu segar.\n3. Tuang espresso segar.",
-                'note'        => 'Karakter rasa unik dan segar khas Versi Kopi.',
-            ],
-            [
-                'name'        => 'Kopi Susu Java Latte',
-                'category'    => 'Coffee',
-                'description' => 'Stronger taste, smoother — rasa kopi yang pas bikin hari lebih berasa.',
-                'price_m'     => 12000,
-                'price_l'     => 15000,
-                'gradient'    => '#D2B49C,#98765C',
-                'image_url'   => '/products/java-latte.jpg',
-                'prep_time'   => '2 Menit',
-                'ingredients' => [
-                    ['name' => 'Espresso House Blend', 'amount_m' => '35', 'amount_l' => '50', 'unit' => 'ml'],
-                    ['name' => 'Susu Segar Pasteurisasi', 'amount_m' => '120', 'amount_l' => '150', 'unit' => 'ml'],
-                    ['name' => 'Simple Syrup', 'amount_m' => '15', 'amount_l' => '20', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Campurkan espresso dengan simple syrup.\n2. Masukkan es batu dan susu segar hingga penuh.",
-                'note'        => 'Body kopi lebih kuat dengan tekstur akhir yang halus.',
-            ],
-            [
-                'name'        => 'Kopi Susu Hazelnut',
-                'category'    => 'Coffee',
-                'description' => 'Sweet, nutty, classic — kopi susu lembut dengan aroma kacang hazelnut.',
-                'price_m'     => 16000,
-                'price_l'     => 19000,
-                'gradient'    => '#DFC39D,#A88558',
-                'image_url'   => '/products/kopi-hazelnut.jpg',
-                'prep_time'   => '2 Menit',
-                'ingredients' => [
-                    ['name' => 'Espresso House Blend', 'amount_m' => '30', 'amount_l' => '45', 'unit' => 'ml'],
-                    ['name' => 'Susu Segar Pasteurisasi', 'amount_m' => '120', 'amount_l' => '160', 'unit' => 'ml'],
-                    ['name' => 'Sirup Buah & Varian Rasa', 'amount_m' => '25', 'amount_l' => '35', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Tuang sirup hazelnut ke dalam cup.\n2. Tambahkan es batu dan susu segar.\n3. Tuang shot espresso di atasnya.",
-                'note'        => 'Aroma nutty hazelnut keluar kuat saat disajikan dingin.',
-            ],
-            [
-                'name'        => 'Kopi Susu Butterscotch',
-                'category'    => 'Coffee',
-                'description' => 'Rich, buttery, smooth — kopi susu dengan sensasi butterscotch legit.',
-                'price_m'     => 16000,
-                'price_l'     => 19000,
-                'gradient'    => '#E4BE8E,#B8864B',
-                'image_url'   => '/products/kopi-butterscotch.jpg',
-                'prep_time'   => '2.5 Menit',
-                'ingredients' => [
-                    ['name' => 'Espresso House Blend', 'amount_m' => '30', 'amount_l' => '45', 'unit' => 'ml'],
-                    ['name' => 'Susu Segar Pasteurisasi', 'amount_m' => '120', 'amount_l' => '160', 'unit' => 'ml'],
-                    ['name' => 'Sirup Karamel & Butterscotch', 'amount_m' => '25', 'amount_l' => '35', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Beri drizzle saus butterscotch di dinding cup.\n2. Tuang es batu dan susu segar.\n3. Tambahkan espresso di atasnya.",
-                'note'        => 'Rasa buttery dan manis lembut.',
-            ],
-            [
-                'name'        => 'Kopi Caramel',
-                'category'    => 'Coffee',
-                'description' => 'Sweet & bold — kombinasi espresso pekat, susu segar, dan saus karamel.',
-                'price_m'     => 16000,
-                'price_l'     => 19000,
-                'gradient'    => '#D8B493,#A67C58',
-                'image_url'   => '/products/kopi-caramel.jpg',
-                'prep_time'   => '2.5 Menit',
-                'ingredients' => [
-                    ['name' => 'Espresso House Blend', 'amount_m' => '30', 'amount_l' => '45', 'unit' => 'ml'],
-                    ['name' => 'Susu Segar Pasteurisasi', 'amount_m' => '120', 'amount_l' => '160', 'unit' => 'ml'],
-                    ['name' => 'Sirup Karamel & Butterscotch', 'amount_m' => '25', 'amount_l' => '35', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Tuang sirup karamel pada dasar dan dinding cup.\n2. Masukkan es batu dan susu segar.\n3. Tuang shot espresso.",
-                'note'        => 'Manis karamel berpadu dengan karakter espresso yang bold.',
-            ],
-            [
-                'name'        => 'Versinya Salted Caramel',
-                'category'    => 'Signature',
-                'description' => 'Perpaduan espresso, susu creamy, dan saus salted caramel gurih manis.',
-                'price_m'     => 16000,
-                'price_l'     => 19000,
-                'gradient'    => '#D2B49C,#98765C',
-                'image_url'   => '/products/salted-caramel.jpg',
-                'prep_time'   => '2.5 Menit',
-                'ingredients' => [
-                    ['name' => 'Espresso House Blend', 'amount_m' => '30', 'amount_l' => '45', 'unit' => 'ml'],
-                    ['name' => 'Susu Segar Pasteurisasi', 'amount_m' => '120', 'amount_l' => '160', 'unit' => 'ml'],
-                    ['name' => 'Sirup Karamel & Butterscotch', 'amount_m' => '25', 'amount_l' => '35', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Campurkan salted caramel di dasar cup.\n2. Masukkan es batu, susu segar, dan espresso di bagian atas.",
-                'note'        => 'Sentuhan gurih garam laut menyeimbangkan manis karamel.',
-            ],
-            [
-                'name'        => 'Americano',
-                'category'    => 'Coffee',
-                'description' => 'Simple but never boring — ekstrak espresso segar dengan air mineral dingin.',
-                'price_m'     => 12000,
-                'price_l'     => 15000,
-                'gradient'    => '#B8967A,#7B5B43',
-                'image_url'   => '/products/americano.jpg',
-                'prep_time'   => '1.5 Menit',
-                'ingredients' => [
-                    ['name' => 'Espresso House Blend', 'amount_m' => '30', 'amount_l' => '60', 'unit' => 'ml'],
-                    ['name' => 'Air Mineral', 'amount_m' => '150', 'amount_l' => '180', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '80', 'amount_l' => '110', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Tuang air mineral dingin dan es batu ke dalam cup.\n2. Ekstrak espresso segar di atasnya.",
-                'note'        => 'Segar, ringan, dan menonjolkan karakter asli biji kopi.',
-            ],
-            [
-                'name'        => 'Versi Ramu',
-                'category'    => 'Signature',
-                'description' => 'Americano fruity segar dengan perpaduan sirup anggur hijau, apel & madu.',
-                'price_m'     => 15000,
-                'price_l'     => 18000,
-                'gradient'    => '#B7C6A5,#7A9068',
-                'image_url'   => '/products/versi-ramu.jpg',
-                'prep_time'   => '2 Menit',
-                'ingredients' => [
-                    ['name' => 'Espresso House Blend', 'amount_m' => '30', 'amount_l' => '45', 'unit' => 'ml'],
-                    ['name' => 'Sirup Buah & Varian Rasa', 'amount_m' => '25', 'amount_l' => '35', 'unit' => 'ml'],
-                    ['name' => 'Air Mineral', 'amount_m' => '120', 'amount_l' => '150', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Tuang sirup anggur hijau & apel di dasar cup.\n2. Masukkan es batu dan air mineral.\n3. Tuang espresso secara perlahan agar terbentuk gradasi layer.",
-                'note'        => 'Menu signature baru dengan sensasi fruity menyegarkan.',
-            ],
-            [
-                'name'        => 'Versi Rindu',
-                'category'    => 'Signature',
-                'description' => 'Creamy, gurihnya ada — racikan kopi susu spesial yang bikin kangen.',
-                'price_m'     => 15000,
-                'price_l'     => 18000,
-                'gradient'    => '#DFC39D,#A88558',
-                'image_url'   => '/products/versi-rindu.jpg',
-                'prep_time'   => '2 Menit',
-                'ingredients' => [
-                    ['name' => 'Espresso House Blend', 'amount_m' => '30', 'amount_l' => '45', 'unit' => 'ml'],
-                    ['name' => 'Susu Segar Pasteurisasi', 'amount_m' => '130', 'amount_l' => '170', 'unit' => 'ml'],
-                    ['name' => 'Sirup Karamel & Butterscotch', 'amount_m' => '20', 'amount_l' => '30', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Racik susu segar dengan sirup gurih creamy.\n2. Tambahkan es batu dan tuang shot espresso di atasnya.",
-                'note'        => 'Tekstur lebih creamy dan gurih dibanding kopi susu biasa.',
-            ],
-            [
-                'name'        => 'Matcha Coffee',
-                'category'    => 'Signature',
-                'description' => 'Layer Matcha Jepang lembut di atas berpadu dengan Americano di bawah.',
-                'price_m'     => 16000,
-                'price_l'     => 19000,
-                'gradient'    => '#B7C6A5,#7A9068',
-                'image_url'   => '/products/matcha-coffee.jpg',
-                'prep_time'   => '2.5 Menit',
-                'ingredients' => [
-                    ['name' => 'Espresso House Blend', 'amount_m' => '30', 'amount_l' => '45', 'unit' => 'ml'],
-                    ['name' => 'Bubuk Pure Matcha Jepang', 'amount_m' => '5', 'amount_l' => '7', 'unit' => 'gr'],
-                    ['name' => 'Susu Segar Pasteurisasi', 'amount_m' => '100', 'amount_l' => '130', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Siapkan base espresso dan es batu di bagian bawah cup.\n2. Whisk matcha bersama susu segar lalu tuang perlahan di bagian atas.",
-                'note'        => 'Tampilan dua layer hijau matcha di atas dan cokelat kopi di bawah.',
-            ],
-
-            // Non-Coffee
-            [
-                'name'        => 'Green Tea Latte (Matcha Latte)',
-                'category'    => 'Non-Coffee',
-                'description' => 'Smooth, earthy, mellow — matcha asli dengan rasa lembut & creamy.',
-                'price_m'     => 15000,
-                'price_l'     => 18000,
-                'gradient'    => '#B7C6A5,#7A9068',
-                'image_url'   => '/products/green-tea-latte.jpg',
-                'prep_time'   => '2.5 Menit',
-                'ingredients' => [
-                    ['name' => 'Bubuk Pure Matcha Jepang', 'amount_m' => '5', 'amount_l' => '7', 'unit' => 'gr'],
-                    ['name' => 'Susu Segar Pasteurisasi', 'amount_m' => '130', 'amount_l' => '170', 'unit' => 'ml'],
-                    ['name' => 'Simple Syrup', 'amount_m' => '15', 'amount_l' => '20', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Larutkan bubuk matcha dengan air hangat menggunakan chasen.\n2. Tuang es batu, simple syrup, dan susu segar ke dalam cup.\n3. Tuang matcha di bagian atas.",
-                'note'        => 'Warna hijau alami dengan tekstur susu yang lembut.',
-            ],
-            [
-                'name'        => 'Lychee Tea',
-                'category'    => 'Non-Coffee',
-                'description' => 'Segar, manis, ringan — seduhan teh pilihan dengan aroma buah leci.',
-                'price_m'     => 15000,
-                'price_l'     => 18000,
-                'gradient'    => '#E2A3A3,#B46A74',
-                'image_url'   => '/products/ice-black-tea.jpg',
-                'prep_time'   => '1.5 Menit',
-                'ingredients' => [
-                    ['name' => 'Seduhan Teh Hitam', 'amount_m' => '150', 'amount_l' => '200', 'unit' => 'ml'],
-                    ['name' => 'Sirup Buah & Varian Rasa', 'amount_m' => '25', 'amount_l' => '35', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Campurkan teh hitam dingin dengan sirup leci.\n2. Masukkan es batu kristal dan aduk rata.",
-                'note'        => 'Manis segar dan ringan.',
-            ],
-            [
-                'name'        => 'Lemon Tea',
-                'category'    => 'Non-Coffee',
-                'description' => 'Fresh, asamnya pas — teh dingin segar dengan perasan lemon.',
-                'price_m'     => 8000,
-                'price_l'     => 11000,
-                'gradient'    => '#E5C585,#B38E46',
-                'image_url'   => '/products/ice-black-tea.jpg',
-                'prep_time'   => '1.5 Menit',
-                'ingredients' => [
-                    ['name' => 'Seduhan Teh Hitam', 'amount_m' => '150', 'amount_l' => '200', 'unit' => 'ml'],
-                    ['name' => 'Sirup Buah & Varian Rasa', 'amount_m' => '20', 'amount_l' => '30', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Tuang teh hitam dan konsentrat lemon segar.\n2. Tambahkan es batu kristal hingga penuh.",
-                'note'        => 'Sangat menyegarkan dan cocok dipadukan dengan paket hemat.',
-            ],
-            [
-                'name'        => 'Thai Tea',
-                'category'    => 'Non-Coffee',
-                'description' => 'Creamy, wangi, nagih — racikan teh Thailand autentik dengan susu.',
-                'price_m'     => 15000,
-                'price_l'     => 18000,
-                'gradient'    => '#E4BE8E,#B8864B',
-                'image_url'   => '/products/aren-temu.jpg',
-                'prep_time'   => '2 Menit',
-                'ingredients' => [
-                    ['name' => 'Seduhan Teh Hitam', 'amount_m' => '120', 'amount_l' => '160', 'unit' => 'ml'],
-                    ['name' => 'Susu Segar Pasteurisasi', 'amount_m' => '60', 'amount_l' => '80', 'unit' => 'ml'],
-                    ['name' => 'Simple Syrup', 'amount_m' => '15', 'amount_l' => '20', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Campurkan seduhan teh pekat dengan susu dan simple syrup.\n2. Tuang ke dalam cup berisi es batu.",
-                'note'        => 'Wangi rempah teh yang khas dan creamy.',
-            ],
-            [
-                'name'        => 'Ice Black Tea',
-                'category'    => 'Non-Coffee',
-                'description' => 'Classic, timeless — teh hitam pilihan dengan rasa yang menyegarkan.',
-                'price_m'     => 5000,
-                'price_l'     => 8000,
-                'gradient'    => '#C89D94,#8D625A',
-                'image_url'   => '/products/ice-black-tea.jpg',
-                'prep_time'   => '1 Menit',
-                'ingredients' => [
-                    ['name' => 'Seduhan Teh Hitam', 'amount_m' => '180', 'amount_l' => '220', 'unit' => 'ml'],
-                    ['name' => 'Simple Syrup', 'amount_m' => '15', 'amount_l' => '20', 'unit' => 'ml'],
-                    ['name' => 'Es Batu Kristal', 'amount_m' => '90', 'amount_l' => '120', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Siapkan es batu kristal di dalam cup.\n2. Tuang seduhan teh hitam segar dan simple syrup.",
-                'note'        => 'Minuman teh klasik paling hemat dan menyegarkan.',
-            ],
-
-            // Snack
-            [
-                'name'        => 'Cireng Isi Ayam (5 pcs)',
-                'category'    => 'Snack',
-                'description' => '5 pcs cireng renyah isi ayam suwir gurih lengkap dengan saus sambal.',
-                'price_m'     => 10000,
-                'price_l'     => 10000,
-                'gradient'    => '#E4BE8E,#B8864B',
-                'image_url'   => '/products/cireng-ayam.jpg',
-                'prep_time'   => '4 Menit',
-                'ingredients' => [
-                    ['name' => 'Bahan Cireng & Dimsum', 'amount_m' => '125', 'amount_l' => '125', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Goreng 5 pcs cireng isi ayam dengan api sedang hingga matang merata.\n2. Tiriskan dan sajikan hangat bersama saus sambal.",
-                'note'        => 'Sajikan selagi hangat dan renyah.',
-            ],
-            [
-                'name'        => 'Dimsum Keju (4 pcs)',
-                'category'    => 'Snack',
-                'description' => '4 pcs kudapan goreng renyah dengan isian keju lumer melimpah & saus.',
-                'price_m'     => 13000,
-                'price_l'     => 13000,
-                'gradient'    => '#E5C585,#B38E46',
-                'image_url'   => '/products/dimsum-keju.jpg',
-                'prep_time'   => '4 Menit',
-                'ingredients' => [
-                    ['name' => 'Bahan Cireng & Dimsum', 'amount_m' => '140', 'amount_l' => '140', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Goreng 4 pcs hingga kulit keemasan dan keju di dalamnya meleleh.\n2. Sajikan bersama saus cocolan.",
-                'note'        => 'Keju lumer saat digigit hangat.',
-            ],
-            [
-                'name'        => 'French Fries (Kentang Kecil)',
-                'category'    => 'Snack',
-                'description' => 'Kentang goreng potong kecil (shoestring) renyah bertabur bumbu gurih.',
-                'price_m'     => 8000,
-                'price_l'     => 10000,
-                'gradient'    => '#E5C585,#B38E46',
-                'image_url'   => '/products/french-fries.jpg',
-                'prep_time'   => '3 Menit',
-                'ingredients' => [
-                    ['name' => 'Kentang & Bumbu Snack', 'amount_m' => '100', 'amount_l' => '130', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Goreng kentang shoestring hingga garing keemasan.\n2. Taburi bumbu parsley gurih dan sajikan di paper cup.",
-                'note'        => 'Potongan kecil (shoestring) ekstra renyah.',
-            ],
-            [
-                'name'        => 'Kentang Potong Gede (Crinkle Cut)',
-                'category'    => 'Snack',
-                'description' => 'Kentang goreng potongan besar bergelombang (crinkle cut) garing di luar.',
-                'price_m'     => 10000,
-                'price_l'     => 12000,
-                'gradient'    => '#E4BE8E,#B8864B',
-                'image_url'   => '/products/kentang-crinkle.jpg',
-                'prep_time'   => '3.5 Menit',
-                'ingredients' => [
-                    ['name' => 'Kentang & Bumbu Snack', 'amount_m' => '130', 'amount_l' => '160', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Goreng kentang crinkle cut hingga keemasan.\n2. Taburi bumbu gurih dan sajikan hangat.",
-                'note'        => 'Potongan besar lembut di dalam dan renyah di luar.',
-            ],
-            [
-                'name'        => 'Burger',
-                'category'    => 'Snack',
-                'description' => 'Roti bun lembut dengan patty krispi, selada segar, timun, dan saus spesial.',
-                'price_m'     => 10000,
-                'price_l'     => 13000,
-                'gradient'    => '#D8B493,#A67C58',
-                'image_url'   => '/products/burger.jpg',
-                'prep_time'   => '4 Menit',
-                'ingredients' => [
-                    ['name' => 'Roti Bun & Patty Burger', 'amount_m' => '140', 'amount_l' => '180', 'unit' => 'gr'],
-                ],
-                'steps'       => "1. Panggang roti bun dengan sedikit butter.\n2. Goreng patty hingga krispi.\n3. Susun roti, selada, timun, patty, saus keju, dan saus sambal.",
-                'note'        => 'Menu snack favorit pengganjal lapar.',
-            ],
-        ];
-
-        DB::table('recipes')->delete();
-        DB::table('products')->delete();
-
-        $productIdsByName = [];
-        foreach ($satuanMenus as $m) {
-            $prodId = DB::table('products')->insertGetId([
-                'name'         => $m['name'],
-                'category'     => $m['category'],
-                'item_type'    => 'satuan',
-                'description'  => $m['description'],
-                'bundle_items' => null,
-                'price_m'      => $m['price_m'],
-                'price_l'      => $m['price_l'],
-                'stock'        => 60,
-                'max_stock'    => 60,
-                'emoji'        => $m['category'] === 'Snack' ? 'SNACK' : 'KOPI',
-                'gradient'     => $m['gradient'],
-                'image_url'    => $m['image_url'],
-                'active'       => 1,
-                'created_at'   => now(),
-                'updated_at'   => now(),
-            ]);
-
-            $productIdsByName[$m['name']] = $prodId;
-
-            DB::table('recipes')->insert([
-                'product_id'   => $prodId,
-                'prep_time'    => $m['prep_time'],
-                'ingredients'  => json_encode($m['ingredients'], JSON_UNESCAPED_UNICODE),
-                'steps'        => $m['steps'],
-                'barista_note' => $m['note'],
-                'created_at'   => now(),
-                'updated_at'   => now(),
-            ]);
-        }
-
-        // daftar menu paketan resmi dari daftar harga
-        $burgerId = $productIdsByName['Burger'] ?? null;
-        $friesId = $productIdsByName['French Fries (Kentang Kecil)'] ?? null;
-        $blackTeaId = $productIdsByName['Ice Black Tea'] ?? null;
-        $lemonTeaId = $productIdsByName['Lemon Tea'] ?? null;
-        $javaLatteId = $productIdsByName['Kopi Susu Java Latte'] ?? null;
-        $arenTemuId = $productIdsByName['Kopi Susu Temu (Aren Temu)'] ?? null;
-
-        $paketanMenus = [
-            [
-                'name'        => 'Paket Hemat Burger + French Fries',
-                'description' => 'Burger + Fried French lengkap dengan saus sambal & keju.',
-                'price_m'     => 15000,
-                'price_l'     => 18000,
-                'gradient'    => '#D8B493,#A67C58',
-                'image_url'   => '/products/paket-burger-kentang.jpg',
-                'items'       => [
-                    ['product_id' => $burgerId, 'name' => 'Burger', 'qty' => 1],
-                    ['product_id' => $friesId, 'name' => 'French Fries (Kentang Kecil)', 'qty' => 1],
-                ],
-            ],
-            [
-                'name'        => 'Paket Hemat Ice Black Tea',
-                'description' => '1 Burger + 1 French Fries + 1 Cup Ice Black Tea segar.',
-                'price_m'     => 20000,
-                'price_l'     => 23000,
-                'gradient'    => '#C89D94,#8D625A',
-                'image_url'   => '/products/paket-hemat-tea.jpg',
-                'items'       => [
-                    ['product_id' => $burgerId, 'name' => 'Burger', 'qty' => 1],
-                    ['product_id' => $friesId, 'name' => 'French Fries (Kentang Kecil)', 'qty' => 1],
-                    ['product_id' => $blackTeaId, 'name' => 'Ice Black Tea', 'qty' => 1],
-                ],
-            ],
-            [
-                'name'        => 'Paket Hemat Lemon Tea',
-                'description' => '1 Burger + 1 French Fries + 1 Cup Lemon Tea segar.',
-                'price_m'     => 23000,
-                'price_l'     => 26000,
-                'gradient'    => '#E5C585,#B38E46',
-                'image_url'   => '/products/paket-hemat-tea.jpg',
-                'items'       => [
-                    ['product_id' => $burgerId, 'name' => 'Burger', 'qty' => 1],
-                    ['product_id' => $friesId, 'name' => 'French Fries (Kentang Kecil)', 'qty' => 1],
-                    ['product_id' => $lemonTeaId, 'name' => 'Lemon Tea', 'qty' => 1],
-                ],
-            ],
-            [
-                'name'        => 'Paket Hemat Kopi Java',
-                'description' => '1 Burger + 1 French Fries + 1 Cup Kopi Susu Java Latte.',
-                'price_m'     => 27000,
-                'price_l'     => 30000,
-                'gradient'    => '#C4A484,#8A684C',
-                'image_url'   => '/products/paket-hemat-kopi-java.jpg',
-                'items'       => [
-                    ['product_id' => $burgerId, 'name' => 'Burger', 'qty' => 1],
-                    ['product_id' => $friesId, 'name' => 'French Fries (Kentang Kecil)', 'qty' => 1],
-                    ['product_id' => $javaLatteId, 'name' => 'Kopi Susu Java Latte', 'qty' => 1],
-                ],
-            ],
-            [
-                'name'        => 'Bundling Kentang + Kopi Temu',
-                'description' => '1 porsi French Fries + 1 Cup Kopi Susu Temu (Aren Temu).',
-                'price_m'     => 22000,
-                'price_l'     => 25000,
-                'gradient'    => '#D2B49C,#98765C',
-                'image_url'   => '/products/paket-kentang-kopi-temu.jpg',
-                'items'       => [
-                    ['product_id' => $friesId, 'name' => 'French Fries (Kentang Kecil)', 'qty' => 1],
-                    ['product_id' => $arenTemuId, 'name' => 'Kopi Susu Temu (Aren Temu)', 'qty' => 1],
-                ],
-            ],
-            [
-                'name'        => 'Versinya Teman Dirumah Berlima (Java Latte 5)',
-                'description' => 'Bundling hemat 5 Cup Kopi Susu Java Latte untuk dinikmati bersama.',
-                'price_m'     => 60000,
-                'price_l'     => 72000,
-                'gradient'    => '#D8B493,#A67C58',
-                'image_url'   => '/products/java-latte-5cup.jpg',
-                'items'       => [
-                    ['product_id' => $javaLatteId, 'name' => 'Kopi Susu Java Latte', 'qty' => 5],
-                ],
-            ],
-        ];
-
-        foreach ($paketanMenus as $b) {
-            DB::table('products')->insert([
-                'name'         => $b['name'],
-                'category'     => 'Bundling',
-                'item_type'    => 'paketan',
-                'description'  => $b['description'],
-                'bundle_items' => json_encode($b['items'], JSON_UNESCAPED_UNICODE),
-                'price_m'      => $b['price_m'],
-                'price_l'      => $b['price_l'],
-                'stock'        => 30,
-                'max_stock'    => 30,
-                'emoji'        => 'PAKET',
-                'gradient'     => $b['gradient'],
-                'image_url'    => $b['image_url'],
-                'active'       => 1,
-                'created_at'   => now(),
-                'updated_at'   => now(),
-            ]);
-        }
+        return DB::table($table)->get()->first(fn (object $row): bool => (int) $row->id !== $exceptId && mb_strtolower($this->cleanName($row->name)) === $key);
     }
 
-    // hitung stok bahan bersama
-    private function enrichProductsWithStockCalculations($products)
+    private function assertUniqueMenuName(string $name, ?int $exceptId = null): void
     {
-        $this->ensureExtendedSchema();
-
-        $recipesByProdId = DB::table('recipes')->get()->keyBy('product_id');
-        $ingredientsMap = DB::table('ingredients_stock')->get()->keyBy(function ($item) {
-            return mb_strtolower(trim($item->name));
-        });
-
-        // hitung porsi dari kebutuhan bahan
-        $calcFromIngredientNeeds = function (array $needsMap) use ($ingredientsMap): array {
-            if (empty($needsMap)) {
-                return [
-                    'stock'           => 50,
-                    'max_stock'       => 50,
-                    'stock_percent'   => 100,
-                    'limiting_reason' => null,
-                ];
-            }
-
-            $minPortions = null;
-            $maxPortionsForLimiting = null;
-            $minPercent = null;
-            $limitingName = null;
-
-            foreach ($needsMap as $key => $info) {
-                $need = (float) ($info['need'] ?? 0);
-                if ($need <= 0 || ! isset($ingredientsMap[$key])) {
-                    continue;
-                }
-                $stockRow = $ingredientsMap[$key];
-                $curAmt = max(0.0, (float) $stockRow->current_stock);
-                $maxAmt = max($curAmt, (float) $stockRow->max_stock, $need);
-
-                $possiblePortions = (int) floor($curAmt / $need);
-                $maxPossiblePortions = max(1, (int) floor($maxAmt / $need));
-                $ingPct = $maxAmt > 0 ? round(($curAmt / $maxAmt) * 100, 1) : 100.0;
-
-                if ($minPortions === null || $possiblePortions < $minPortions) {
-                    $minPortions = $possiblePortions;
-                    $maxPortionsForLimiting = $maxPossiblePortions;
-                    $limitingName = "{$stockRow->name} (sisa " . round($curAmt, 1) . " {$stockRow->unit})";
-                }
-                if ($minPercent === null || $ingPct < $minPercent) {
-                    $minPercent = $ingPct;
-                }
-            }
-
-            if ($minPortions === null) {
-                return [
-                    'stock'           => 50,
-                    'max_stock'       => 50,
-                    'stock_percent'   => 100,
-                    'limiting_reason' => null,
-                ];
-            }
-
-            return [
-                'stock'           => $minPortions,
-                'max_stock'       => $maxPortionsForLimiting ?? max(20, $minPortions),
-                'stock_percent'   => (int) round($minPercent ?? 100),
-                'limiting_reason' => $limitingName,
-            ];
-        };
-
-        return collect($products)->map(function ($prod) use ($recipesByProdId, $calcFromIngredientNeeds) {
-            $itemType = $prod->item_type ?? 'satuan';
-            $bundleItems = [];
-            if ($itemType === 'paketan' && ! empty($prod->bundle_items)) {
-                $decoded = json_decode($prod->bundle_items, true);
-                if (is_array($decoded)) {
-                    $bundleItems = $decoded;
-                }
-            }
-
-            $needsMap = [];
-            $recipeSummary = [];
-
-            if ($itemType === 'satuan') {
-                if (isset($recipesByProdId[$prod->id])) {
-                    $ingList = json_decode($recipesByProdId[$prod->id]->ingredients, true);
-                    if (is_array($ingList)) {
-                        foreach ($ingList as $ing) {
-                            $name = trim($ing['name'] ?? '');
-                            $key = mb_strtolower($name);
-                            $needM = (float) ($ing['amount_m'] ?? 0);
-                            $needL = (float) ($ing['amount_l'] ?? $needM);
-                            $unit = $ing['unit'] ?? 'ml';
-                            if ($key !== '' && $needM > 0) {
-                                $needsMap[$key] = [
-                                    'need'  => ($needsMap[$key]['need'] ?? 0) + $needM,
-                                    'label' => $name,
-                                    'unit'  => $unit,
-                                ];
-                                $recipeSummary[] = [
-                                    'name'     => $name,
-                                    'amount_m' => $needM,
-                                    'amount_l' => $needL,
-                                    'unit'     => $unit,
-                                ];
-                            }
-                        }
-                    }
-                }
-            } elseif ($itemType === 'paketan' && ! empty($bundleItems)) {
-                // gabung bahan menu paketan
-                foreach ($bundleItems as $bItem) {
-                    $compId = (int) ($bItem['product_id'] ?? 0);
-                    $compQty = max(1, (int) ($bItem['qty'] ?? 1));
-                    if (isset($recipesByProdId[$compId])) {
-                        $ingList = json_decode($recipesByProdId[$compId]->ingredients, true);
-                        if (is_array($ingList)) {
-                            foreach ($ingList as $ing) {
-                                $name = trim($ing['name'] ?? '');
-                                $key = mb_strtolower($name);
-                                $needM = (float) ($ing['amount_m'] ?? 0) * $compQty;
-                                $needL = (float) ($ing['amount_l'] ?? ($ing['amount_m'] ?? 0)) * $compQty;
-                                $unit = $ing['unit'] ?? 'ml';
-                                if ($key !== '' && $needM > 0) {
-                                    $needsMap[$key] = [
-                                        'need'      => ($needsMap[$key]['need'] ?? 0) + $needM,
-                                        'need_l'    => ($needsMap[$key]['need_l'] ?? 0) + $needL,
-                                        'label'     => $name,
-                                        'unit'      => $unit,
-                                    ];
-                                }
-                            }
-                        }
-                    }
-                }
-                foreach ($needsMap as $info) {
-                    $recipeSummary[] = [
-                        'name'     => $info['label'],
-                        'amount_m' => $info['need'],
-                        'amount_l' => $info['need_l'] ?? $info['need'],
-                        'unit'     => $info['unit'],
-                    ];
-                }
-            }
-
-            $calc = $calcFromIngredientNeeds($needsMap);
-            $effectiveStock = (int) $calc['stock'];
-            $maxStock = (int) $calc['max_stock'];
-            $stockPercent = (int) $calc['stock_percent'];
-            $limitingReason = $calc['limiting_reason'];
-
-            // batas kunci stok
-            $isLocked = ($effectiveStock <= 3) || ($stockPercent <= 5);
-
-            // batas peringatan stok
-            $isWarning = ! $isLocked && $stockPercent <= 20;
-
-            $prodObj = (array) $prod;
-            $prodObj['item_type'] = $itemType;
-            $prodObj['bundle_items'] = $bundleItems;
-            $prodObj['recipe_summary'] = $recipeSummary;
-            $prodObj['stock'] = $effectiveStock;
-            $prodObj['raw_stock'] = $effectiveStock;
-            $prodObj['max_stock'] = $maxStock;
-            $prodObj['stock_percent'] = $stockPercent;
-            $prodObj['is_locked'] = $isLocked;
-            $prodObj['is_warning'] = $isWarning;
-            $prodObj['limiting_reason'] = $limitingReason ? "Bahan {$limitingReason}" : null;
-
-            return $prodObj;
-        })->values();
+        if ($this->namedRecord('products', $name, $exceptId)) {
+            throw ValidationException::withMessages(['name' => ['Menu sudah ada. Gunakan menu yang sudah terdaftar.']]);
+        }
     }
 
     private function logoVersion(): ?string
@@ -943,7 +91,11 @@ class PosController extends Controller
 
     public function getSettings(): JsonResponse
     {
-        return response()->json(DB::table('settings')->pluck('value', 'key')->put('logo_version', $this->logoVersion()));
+        $settings = DB::table('settings')
+            ->whereIn('key', self::ALLOWED_SETTINGS)
+            ->pluck('value', 'key');
+
+        return response()->json($settings->put('logo_version', $this->logoVersion()));
     }
 
     public function updateSettings(Request $request): JsonResponse
@@ -1009,12 +161,12 @@ class PosController extends Controller
     public function storePromo(Request $request)
     {
         $data = $request->validate([
-            'code'         => ['required', 'string', 'max:32', 'regex:/^[A-Za-z0-9_-]+$/'],
-            'type'         => ['required', 'string', 'in:percent,fixed'],
-            'value'        => ['required', 'integer', 'min:1', 'max:10000000'],
+            'code' => ['required', 'string', 'max:32', 'regex:/^[A-Za-z0-9_-]+$/'],
+            'type' => ['required', 'string', 'in:percent,fixed'],
+            'value' => ['required', 'integer', 'min:1', 'max:10000000'],
             'min_subtotal' => ['required', 'integer', 'min:0', 'max:100000000'],
             'max_discount' => ['nullable', 'integer', 'min:0', 'max:100000000'],
-            'active'       => ['nullable', 'boolean'],
+            'active' => ['nullable', 'boolean'],
         ]);
 
         if ($data['type'] === 'percent' && (int) $data['value'] > 100) {
@@ -1033,19 +185,19 @@ class PosController extends Controller
         }
 
         $id = DB::table('promos')->insertGetId([
-            'code'         => $code,
-            'type'         => $data['type'],
-            'value'        => (int) $data['value'],
+            'code' => $code,
+            'type' => $data['type'],
+            'value' => (int) $data['value'],
             'min_subtotal' => (int) $data['min_subtotal'],
             'max_discount' => (int) ($data['max_discount'] ?? 0),
-            'active'       => isset($data['active']) ? (int) (bool) $data['active'] : 1,
-            'created_at'   => now(),
-            'updated_at'   => now(),
+            'active' => isset($data['active']) ? (int) (bool) $data['active'] : 1,
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
 
         return response()->json([
             'success' => true,
-            'id'      => $id,
+            'id' => $id,
             'message' => "Promo {$code} berhasil ditambahkan.",
         ], 201);
     }
@@ -1058,12 +210,12 @@ class PosController extends Controller
         }
 
         $data = $request->validate([
-            'code'         => ['required', 'string', 'max:32', 'regex:/^[A-Za-z0-9_-]+$/'],
-            'type'         => ['required', 'string', 'in:percent,fixed'],
-            'value'        => ['required', 'integer', 'min:1', 'max:10000000'],
+            'code' => ['required', 'string', 'max:32', 'regex:/^[A-Za-z0-9_-]+$/'],
+            'type' => ['required', 'string', 'in:percent,fixed'],
+            'value' => ['required', 'integer', 'min:1', 'max:10000000'],
             'min_subtotal' => ['required', 'integer', 'min:0', 'max:100000000'],
             'max_discount' => ['nullable', 'integer', 'min:0', 'max:100000000'],
-            'active'       => ['required', 'boolean'],
+            'active' => ['required', 'boolean'],
         ]);
 
         $code = strtoupper($this->cleanText($data['code'], 32));
@@ -1075,13 +227,13 @@ class PosController extends Controller
         }
 
         DB::table('promos')->where('id', $id)->update([
-            'code'         => $code,
-            'type'         => $data['type'],
-            'value'        => (int) $data['value'],
+            'code' => $code,
+            'type' => $data['type'],
+            'value' => (int) $data['value'],
             'min_subtotal' => (int) $data['min_subtotal'],
             'max_discount' => (int) ($data['max_discount'] ?? 0),
-            'active'       => (int) (bool) $data['active'],
-            'updated_at'   => now(),
+            'active' => (int) (bool) $data['active'],
+            'updated_at' => now(),
         ]);
 
         return response()->json([
@@ -1102,17 +254,16 @@ class PosController extends Controller
 
     public function getProducts()
     {
-        $this->ensureExtendedSchema();
 
         $products = DB::table('products')
             ->where('active', 1)
             ->orderBy('id', 'asc')
             ->get();
 
-        return response()->json($this->availableProducts($this->enrichProductsWithStockCalculations($products)));
+        return response()->json($this->availableProducts(app(InventoryCalculator::class)->enrich($products)));
     }
 
-    private function availableProducts(\Illuminate\Support\Collection $products): \Illuminate\Support\Collection
+    private function availableProducts(Collection $products): Collection
     {
         $activeIds = $products->keyBy('id');
 
@@ -1120,15 +271,14 @@ class PosController extends Controller
             || ($product['bundle_items'] !== [] && collect($product['bundle_items'])->every(function ($item) use ($activeIds): bool {
                 $component = $activeIds->get($item['product_id'] ?? 0);
 
-                return $component !== null && $component['item_type'] === 'satuan';
+                return $component !== null && in_array($component['item_type'], ['satuan', 'perporsi'], true);
             })))->values();
     }
 
     public function getManagedProducts(): JsonResponse
     {
-        $this->ensureExtendedSchema();
 
-        return response()->json($this->enrichProductsWithStockCalculations(DB::table('products')->orderBy('id')->get()));
+        return response()->json(app(InventoryCalculator::class)->enrich(DB::table('products')->orderBy('id')->get()));
     }
 
     public function updateProductStatus(Request $request, int $id): JsonResponse
@@ -1168,26 +318,26 @@ class PosController extends Controller
 
     public function storeProduct(Request $request)
     {
-        $this->ensureExtendedSchema();
 
         $data = $request->validate([
-            'name'                      => ['required', 'string', 'max:120'],
-            'category'                  => ['required', 'string', 'in:' . implode(',', self::ALLOWED_CATEGORIES)],
-            'item_type'                 => ['nullable', 'string', 'in:satuan,paketan'],
-            'bundle_items'              => ['nullable', 'array'],
+            'name' => ['required', 'string', 'max:120'],
+            'category' => ['required', 'string', 'in:'.implode(',', self::ALLOWED_CATEGORIES)],
+            'item_type' => ['nullable', 'string', 'in:satuan,paketan,perporsi'],
+            'bundle_items' => ['nullable', 'array'],
             'bundle_items.*.product_id' => ['required_with:bundle_items', 'integer', 'min:1'],
-            'bundle_items.*.qty'        => ['required_with:bundle_items', 'integer', 'min:1', 'max:50'],
-            'description'               => ['nullable', 'string', 'max:500'],
-            'price_m'                   => ['required', 'integer', 'min:0', 'max:10000000'],
-            'price_l'                   => ['required', 'integer', 'min:0', 'max:10000000'],
-            'stock'                     => ['required', 'integer', 'min:0', 'max:100000'],
-            'max_stock'                 => ['nullable', 'integer', 'min:1', 'max:100000'],
-            'gradient'                  => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6},#[0-9A-Fa-f]{6}$/'],
-            'photo'                     => self::PRODUCT_PHOTO_RULES,
+            'bundle_items.*.qty' => ['required_with:bundle_items', 'integer', 'min:1', 'max:50'],
+            'description' => ['nullable', 'string', 'max:500'],
+            'price_m' => ['required', 'integer', 'min:0', 'max:10000000'],
+            'price_l' => ['required_unless:item_type,perporsi', 'nullable', 'integer', 'min:0', 'max:10000000'],
+            'stock' => ['required', 'integer', 'min:0', 'max:100000'],
+            'max_stock' => ['nullable', 'integer', 'min:1', 'max:100000'],
+            'gradient' => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6},#[0-9A-Fa-f]{6}$/'],
+            'photo' => self::PRODUCT_PHOTO_RULES,
         ]);
 
         $actorName = $this->cleanText($request->user()?->name ?? 'Admin', 100);
-        $name = $this->cleanText($data['name'], 120);
+        $name = $this->cleanName($data['name']);
+        $this->assertUniqueMenuName($name);
         $itemType = $data['item_type'] ?? 'satuan';
         $description = $this->cleanText($data['description'] ?? '', 500);
         $gradient = $data['gradient'] ?? '#D8B493,#A67C58';
@@ -1202,8 +352,8 @@ class PosController extends Controller
                 if ($comp) {
                     $cleanBundles[] = [
                         'product_id' => (int) $comp->id,
-                        'name'       => $comp->name,
-                        'qty'        => (int) $bi['qty'],
+                        'name' => $comp->name,
+                        'qty' => (int) $bi['qty'],
                     ];
                 }
             }
@@ -1211,33 +361,33 @@ class PosController extends Controller
 
         $id = DB::transaction(function () use ($name, $data, $itemType, $cleanBundles, $description, $stock, $maxStock, $gradient, $photo, $actorName) {
             $productId = DB::table('products')->insertGetId([
-                'name'         => $name,
-                'category'     => $itemType === 'paketan' ? 'Bundling' : $data['category'],
-                'item_type'    => $itemType,
-                'description'  => $description,
+                'name' => $name,
+                'category' => $itemType === 'paketan' ? 'Bundling' : $data['category'],
+                'item_type' => $itemType,
+                'description' => $description,
                 'bundle_items' => ! empty($cleanBundles) ? json_encode($cleanBundles, JSON_UNESCAPED_UNICODE) : null,
-                'price_m'      => (int) $data['price_m'],
-                'price_l'      => (int) $data['price_l'],
-                'stock'        => $stock,
-                'max_stock'    => $maxStock,
-                'emoji'        => $itemType === 'paketan' ? 'PAKET' : 'KOPI',
-                'gradient'     => $gradient,
-                'active'       => 1,
-                'created_at'   => now(),
-                'updated_at'   => now(),
+                'price_m' => (int) $data['price_m'],
+                'price_l' => (int) ($itemType === 'perporsi' ? $data['price_m'] : $data['price_l']),
+                'stock' => $stock,
+                'max_stock' => $maxStock,
+                'emoji' => $itemType === 'paketan' ? 'PAKET' : 'KOPI',
+                'gradient' => $gradient,
+                'active' => 1,
+                'created_at' => now(),
+                'updated_at' => now(),
             ]);
 
             DB::table('inventory_logs')->insert([
-                'product_id'   => $productId,
+                'product_id' => $productId,
                 'product_name' => $name,
-                'type'         => 'in',
-                'qty'          => $stock,
-                'stock_after'  => $stock,
-                'note'         => 'Stok awal penambahan menu baru',
-                'reference'    => 'NEW-ITEM',
-                'actor_name'   => $actorName,
-                'created_at'   => now(),
-                'updated_at'   => now(),
+                'type' => 'in',
+                'qty' => $stock,
+                'stock_after' => $stock,
+                'note' => 'Stok awal penambahan menu baru',
+                'reference' => 'NEW-ITEM',
+                'actor_name' => $actorName,
+                'created_at' => now(),
+                'updated_at' => now(),
             ]);
 
             if ($photo !== null) {
@@ -1249,28 +399,28 @@ class PosController extends Controller
 
         return response()->json([
             'success' => true,
-            'id'      => $id,
+            'id' => $id,
             'message' => 'Menu baru berhasil ditambahkan.',
         ], 201);
     }
 
     public function updateProduct(Request $request, int $id)
     {
-        $this->ensureExtendedSchema();
 
         $data = $request->validate([
-            'name'                      => ['required', 'string', 'max:120'],
-            'category'                  => ['required', 'string', 'in:' . implode(',', self::ALLOWED_CATEGORIES)],
-            'item_type'                 => ['nullable', 'string', 'in:satuan,paketan'],
-            'bundle_items'              => ['nullable', 'array'],
+            'name' => ['required', 'string', 'max:120'],
+            'category' => ['required', 'string', 'in:'.implode(',', self::ALLOWED_CATEGORIES)],
+            'item_type' => ['nullable', 'string', 'in:satuan,paketan,perporsi'],
+            'bundle_items' => ['nullable', 'array'],
             'bundle_items.*.product_id' => ['required_with:bundle_items', 'integer', 'min:1'],
-            'bundle_items.*.qty'        => ['required_with:bundle_items', 'integer', 'min:1', 'max:50'],
-            'description'               => ['nullable', 'string', 'max:500'],
-            'price_m'                   => ['required', 'integer', 'min:0', 'max:10000000'],
-            'price_l'                   => ['required', 'integer', 'min:0', 'max:10000000'],
-            'max_stock'                 => ['nullable', 'integer', 'min:1', 'max:100000'],
-            'gradient'                  => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6},#[0-9A-Fa-f]{6}$/'],
-            'photo'                     => self::PRODUCT_PHOTO_RULES,
+            'bundle_items.*.qty' => ['required_with:bundle_items', 'integer', 'min:1', 'max:50'],
+            'description' => ['nullable', 'string', 'max:500'],
+            'price_m' => ['required', 'integer', 'min:0', 'max:10000000'],
+            'price_l' => ['required_unless:item_type,perporsi', 'nullable', 'integer', 'min:0', 'max:10000000'],
+            'stock' => ['required_if:item_type,perporsi', 'integer', 'min:0', 'max:100000'],
+            'max_stock' => ['nullable', 'integer', 'min:1', 'max:100000'],
+            'gradient' => ['nullable', 'string', 'regex:/^#[0-9A-Fa-f]{6},#[0-9A-Fa-f]{6}$/'],
+            'photo' => self::PRODUCT_PHOTO_RULES,
         ]);
 
         $product = DB::table('products')->where('id', $id)->first();
@@ -1279,6 +429,7 @@ class PosController extends Controller
         }
 
         $itemType = $data['item_type'] ?? ($product->item_type ?? 'satuan');
+        $this->assertUniqueMenuName($data['name'], $id);
         $cleanBundles = [];
         if ($itemType === 'paketan' && ! empty($data['bundle_items'])) {
             foreach ($data['bundle_items'] as $bi) {
@@ -1286,8 +437,8 @@ class PosController extends Controller
                 if ($comp) {
                     $cleanBundles[] = [
                         'product_id' => (int) $comp->id,
-                        'name'       => $comp->name,
-                        'qty'        => (int) $bi['qty'],
+                        'name' => $comp->name,
+                        'qty' => (int) $bi['qty'],
                     ];
                 }
             }
@@ -1295,17 +446,32 @@ class PosController extends Controller
 
         DB::transaction(function () use ($request, $id, $data, $itemType, $cleanBundles, $product) {
             DB::table('products')->where('id', $id)->update([
-                'name'         => $this->cleanText($data['name'], 120),
-                'category'     => $itemType === 'paketan' ? 'Bundling' : $data['category'],
-                'item_type'    => $itemType,
-                'description'  => $this->cleanText($data['description'] ?? '', 500),
+                'name' => $this->cleanName($data['name']),
+                'category' => $itemType === 'paketan' ? 'Bundling' : $data['category'],
+                'item_type' => $itemType,
+                'description' => $this->cleanText($data['description'] ?? '', 500),
                 'bundle_items' => $itemType === 'paketan' ? json_encode($cleanBundles, JSON_UNESCAPED_UNICODE) : null,
-                'price_m'      => (int) $data['price_m'],
-                'price_l'      => (int) $data['price_l'],
-                'max_stock'    => isset($data['max_stock']) ? max(1, (int) $data['max_stock']) : ($product->max_stock ?? 60),
-                'gradient'     => $data['gradient'] ?? $product->gradient,
-                'updated_at'   => now(),
+                'price_m' => (int) $data['price_m'],
+                'price_l' => (int) ($itemType === 'perporsi' ? $data['price_m'] : $data['price_l']),
+                'max_stock' => isset($data['max_stock']) ? max(1, (int) $data['max_stock']) : ($product->max_stock ?? 60),
+                'gradient' => $data['gradient'] ?? $product->gradient,
+                'updated_at' => now(),
             ]);
+            if ($itemType === 'perporsi' && isset($data['stock'])) {
+                $previousStock = (int) DB::table('products')->where('id', $id)->lockForUpdate()->value('stock');
+                $newStock = (int) $data['stock'];
+                DB::table('products')->where('id', $id)->update(['stock' => $newStock]);
+                if ($newStock !== $previousStock) {
+                    DB::table('inventory_logs')->insert([
+                        'product_id' => $id, 'product_name' => $this->cleanName($data['name']),
+                        'type' => $newStock > $previousStock ? 'in' : 'out',
+                        'qty' => abs($newStock - $previousStock), 'stock_after' => $newStock,
+                        'note' => 'Atur jumlah stok per porsi', 'reference' => 'SET-PORSI',
+                        'actor_name' => $this->cleanText($request->user()?->name ?? 'Admin', 100),
+                        'created_at' => now(), 'updated_at' => now(),
+                    ]);
+                }
+            }
             if ($request->hasFile('photo')) {
                 $this->saveProductPhoto($id, $request->file('photo'));
             }
@@ -1338,7 +504,6 @@ class PosController extends Controller
 
     public function getIngredients()
     {
-        $this->ensureExtendedSchema();
 
         $productsById = DB::table('products')->where('active', 1)->get()->keyBy('id');
         $recipes = DB::table('recipes')->get();
@@ -1346,7 +511,7 @@ class PosController extends Controller
 
         foreach ($recipes as $rec) {
             $prod = $productsById[$rec->product_id] ?? null;
-            if (! $prod) {
+            if (! $prod || ($prod->item_type ?? 'satuan') === 'perporsi') {
                 continue;
             }
             $ingList = json_decode($rec->ingredients, true);
@@ -1358,10 +523,10 @@ class PosController extends Controller
                 $amtM = (float) ($ing['amount_m'] ?? 0);
                 if ($key !== '' && $amtM > 0) {
                     $usedByMap[$key][] = [
-                        'product_id'   => (int) $prod->id,
+                        'product_id' => (int) $prod->id,
                         'product_name' => $prod->name,
-                        'amount_m'     => $amtM,
-                        'unit'         => $ing['unit'] ?? 'ml',
+                        'amount_m' => $amtM,
+                        'unit' => $ing['unit'] ?? 'ml',
                     ];
                 }
             }
@@ -1372,18 +537,19 @@ class PosController extends Controller
             $cur = max(0, (float) $ing->current_stock);
             $pct = (int) round(($cur / $max) * 100);
             $key = mb_strtolower(trim($ing->name));
+
             return [
-                'id'            => (int) $ing->id,
-                'name'          => $ing->name,
-                'unit'          => $ing->unit,
+                'id' => (int) $ing->id,
+                'name' => $ing->name,
+                'unit' => $ing->unit,
                 'current_stock' => round($cur, 1),
-                'max_stock'     => round($max, 1),
-                'stock_amount'  => round($cur, 1),
-                'max_amount'    => round($max, 1),
+                'max_stock' => round($max, 1),
+                'stock_amount' => round($cur, 1),
+                'max_amount' => round($max, 1),
                 'stock_percent' => $pct,
-                'is_locked'     => $pct <= 5,
-                'is_warning'    => $pct > 5 && $pct <= 20,
-                'used_by'       => $usedByMap[$key] ?? [],
+                'is_locked' => $cur <= 0,
+                'is_warning' => $cur > 0 && $pct <= 20,
+                'used_by' => $usedByMap[$key] ?? [],
             ];
         });
 
@@ -1392,28 +558,37 @@ class PosController extends Controller
 
     public function restockIngredient(Request $request)
     {
-        $this->ensureExtendedSchema();
 
         $rawAmt = $request->input('amount', $request->input('qty'));
         $request->merge(['amount' => $rawAmt]);
 
         $data = $request->validate([
-            'name'   => ['required', 'string', 'max:120'],
-            'unit'   => ['required', 'string', 'in:' . implode(',', self::ALLOWED_UNITS)],
+            'ingredient_id' => ['nullable', 'integer', 'min:1', 'exists:ingredients_stock,id'],
+            'name' => ['required', 'string', 'max:120'],
+            'unit' => ['required', 'string', 'in:'.implode(',', self::ALLOWED_UNITS)],
             'amount' => ['required', 'numeric', 'min:0.1', 'max:1000000'],
-            'mode'   => ['nullable', 'string', 'in:add,set'],
-            'note'   => ['nullable', 'string', 'max:255'],
+            'mode' => ['nullable', 'string', 'in:add,set'],
+            'note' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $name = $this->cleanText($data['name'], 120);
+        $name = $this->cleanName($data['name']);
         $qty = (float) $data['amount'];
         $mode = $data['mode'] ?? 'add';
         $actorName = $this->cleanText($request->user()?->name ?? 'Admin', 100);
         $note = $this->cleanText($data['note'] ?? '', 255) ?: ($mode === 'set' ? 'Atur stok penuh bahan baku (100%)' : 'Tambah stok bahan baku gudang');
 
-        $existing = DB::table('ingredients_stock')
-            ->whereRaw('LOWER(name) = ?', [mb_strtolower($name)])
-            ->first();
+        $existing = $this->namedRecord('ingredients_stock', $name);
+        if ($existing && (int) ($data['ingredient_id'] ?? 0) !== (int) $existing->id) {
+            throw ValidationException::withMessages([
+                'name' => ['Bahan sudah ada. Pilih bahan yang sudah ada untuk restock.'],
+            ]);
+        }
+        if (isset($data['ingredient_id']) && (! $existing || (int) $existing->id !== (int) $data['ingredient_id'])) {
+            throw ValidationException::withMessages(['ingredient_id' => ['Bahan yang dipilih tidak sesuai dengan nama bahan.']]);
+        }
+        if ($existing && $data['unit'] !== $existing->unit) {
+            throw ValidationException::withMessages(['unit' => ['Satuan bahan harus sama dengan bahan yang sudah terdaftar.']]);
+        }
 
         if ($existing) {
             if ($mode === 'set') {
@@ -1425,34 +600,34 @@ class PosController extends Controller
             }
             DB::table('ingredients_stock')->where('id', $existing->id)->update([
                 'current_stock' => $newStock,
-                'max_stock'     => $newMax,
-                'unit'          => $data['unit'],
-                'updated_at'    => now(),
+                'max_stock' => $newMax,
+                'unit' => $data['unit'],
+                'updated_at' => now(),
             ]);
             $ingId = (int) $existing->id;
         } else {
             $newStock = $qty;
             $ingId = DB::table('ingredients_stock')->insertGetId([
-                'name'          => $name,
-                'unit'          => $data['unit'],
+                'name' => $name,
+                'unit' => $data['unit'],
                 'current_stock' => $qty,
-                'max_stock'     => $qty,
-                'created_at'    => now(),
-                'updated_at'    => now(),
+                'max_stock' => $qty,
+                'created_at' => now(),
+                'updated_at' => now(),
             ]);
         }
 
         DB::table('inventory_logs')->insert([
-            'product_id'   => $ingId,
+            'product_id' => $ingId,
             'product_name' => "Bahan: {$name} ({$data['unit']})",
-            'type'         => 'in',
-            'qty'          => (int) round($qty),
-            'stock_after'  => (int) round($newStock),
-            'note'         => $note,
-            'reference'    => $mode === 'set' ? 'SET-100%' : 'RESTOCK-BAHAN',
-            'actor_name'   => $actorName,
-            'created_at'   => now(),
-            'updated_at'   => now(),
+            'type' => 'in',
+            'qty' => (int) round($qty),
+            'stock_after' => (int) round($newStock),
+            'note' => $note,
+            'reference' => $mode === 'set' ? 'SET-100%' : 'RESTOCK-BAHAN',
+            'actor_name' => $actorName,
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
 
         return response()->json([
@@ -1465,19 +640,21 @@ class PosController extends Controller
 
     public function getRecipes()
     {
-        $this->ensureExtendedSchema();
 
-        $rows = DB::table('recipes')->orderBy('product_id', 'asc')->get();
+        $rows = DB::table('recipes')->whereIn('product_id',
+            DB::table('products')->where('item_type', '!=', 'perporsi')->select('id')
+        )->orderBy('product_id', 'asc')->get();
         $recipes = $rows->map(function ($row) {
             $decoded = json_decode($row->ingredients, true);
+
             return [
-                'id'           => (int) $row->id,
-                'product_id'   => (int) $row->product_id,
-                'prep_time'    => $row->prep_time,
-                'ingredients'  => is_array($decoded) ? $decoded : [],
-                'steps'        => $row->steps ?? '',
+                'id' => (int) $row->id,
+                'product_id' => (int) $row->product_id,
+                'prep_time' => $row->prep_time,
+                'ingredients' => is_array($decoded) ? $decoded : [],
+                'steps' => $row->steps ?? '',
                 'barista_note' => $row->barista_note ?? '',
-                'updated_at'   => $row->updated_at,
+                'updated_at' => $row->updated_at,
             ];
         });
 
@@ -1486,18 +663,18 @@ class PosController extends Controller
 
     public function saveRecipe(Request $request)
     {
-        $this->ensureExtendedSchema();
 
         $data = $request->validate([
-            'product_id'             => ['required', 'integer', 'min:1'],
-            'prep_time'              => ['nullable', 'string', 'max:50'],
-            'ingredients'            => ['required', 'array', 'min:1', 'max:40'],
-            'ingredients.*.name'     => ['required', 'string', 'max:120'],
+            'recipe_id' => ['nullable', 'integer', 'min:1'],
+            'product_id' => ['required', 'integer', 'min:1'],
+            'prep_time' => ['nullable', 'string', 'max:50'],
+            'ingredients' => ['required', 'array', 'min:1', 'max:40'],
+            'ingredients.*.name' => ['required', 'string', 'max:120'],
             'ingredients.*.amount_m' => ['required', 'string', 'max:30'],
             'ingredients.*.amount_l' => ['required', 'string', 'max:30'],
-            'ingredients.*.unit'     => ['required', 'string', 'in:' . implode(',', self::ALLOWED_UNITS)],
-            'steps'                  => ['nullable', 'string', 'max:2000'],
-            'barista_note'           => ['nullable', 'string', 'max:255'],
+            'ingredients.*.unit' => ['required', 'string', 'in:'.implode(',', self::ALLOWED_UNITS)],
+            'steps' => ['nullable', 'string', 'max:2000'],
+            'barista_note' => ['nullable', 'string', 'max:255'],
         ]);
 
         $productId = (int) $data['product_id'];
@@ -1507,34 +684,40 @@ class PosController extends Controller
             return response()->json(['message' => 'Produk tidak ditemukan.'], 404);
         }
 
+        if (($product->item_type ?? 'satuan') === 'perporsi') {
+            throw ValidationException::withMessages(['product_id' => ['Menu per porsi tidak memakai bahan atau resep.']]);
+        }
+        $existingRecipe = DB::table('recipes')->where('product_id', $productId)->first();
+        if ($existingRecipe && (int) ($data['recipe_id'] ?? 0) !== (int) $existingRecipe->id) {
+            throw ValidationException::withMessages(['product_id' => ['Resep sudah ada. Gunakan Ubah Resep untuk memperbaruinya.']]);
+        }
+        if (! $existingRecipe && isset($data['recipe_id'])) {
+            throw ValidationException::withMessages(['recipe_id' => ['Resep yang akan diubah tidak ditemukan untuk menu ini.']]);
+        }
+
         $cleanIngredients = [];
+        $ingredientNames = [];
         foreach ($data['ingredients'] as $ing) {
-            $name = $this->cleanText($ing['name'], 120);
+            $name = $this->cleanName($ing['name']);
             if ($name === '') {
                 continue;
             }
+            $key = mb_strtolower($name);
+            if (isset($ingredientNames[$key])) {
+                throw ValidationException::withMessages(['ingredients' => ['Bahan sudah ada dalam resep. Gunakan satu baris untuk setiap bahan.']]);
+            }
+            $ingredientNames[$key] = true;
+            $existingIngredient = $this->namedRecord('ingredients_stock', $name);
+            if ($existingIngredient && $existingIngredient->unit !== $ing['unit']) {
+                throw ValidationException::withMessages(['ingredients' => ['Satuan bahan harus sama dengan bahan yang sudah terdaftar.']]);
+            }
             $cleanIngredients[] = [
-                'name'     => $name,
+                'name' => $existingIngredient->name ?? $name,
                 'amount_m' => $this->cleanText($ing['amount_m'], 30),
                 'amount_l' => $this->cleanText($ing['amount_l'], 30),
-                'unit'     => $ing['unit'],
+                'unit' => $ing['unit'],
             ];
 
-            // tambah bahan baru ke gudang
-            $existsIng = DB::table('ingredients_stock')
-                ->whereRaw('LOWER(name) = ?', [mb_strtolower($name)])
-                ->exists();
-            if (! $existsIng) {
-                $defaultCap = $ing['unit'] === 'ml' ? 5000 : ($ing['unit'] === 'gr' ? 2000 : 200);
-                DB::table('ingredients_stock')->insert([
-                    'name'          => $name,
-                    'unit'          => $ing['unit'],
-                    'current_stock' => $defaultCap,
-                    'max_stock'     => $defaultCap,
-                    'created_at'    => now(),
-                    'updated_at'    => now(),
-                ]);
-            }
         }
 
         if (empty($cleanIngredients)) {
@@ -1547,17 +730,36 @@ class PosController extends Controller
         $steps = $this->cleanText($data['steps'] ?? '', 2000);
         $baristaNote = $this->cleanText($data['barista_note'] ?? '', 255);
 
-        DB::table('recipes')->updateOrInsert(
-            ['product_id' => $productId],
-            [
-                'prep_time'    => $prepTime,
-                'ingredients'  => json_encode($cleanIngredients, JSON_UNESCAPED_UNICODE),
-                'steps'        => $steps,
+        DB::transaction(function () use ($productId, $data, $cleanIngredients, $prepTime, $steps, $baristaNote) {
+            $product = DB::table('products')->where('id', $productId)->lockForUpdate()->first();
+            if (! $product || $product->item_type === 'perporsi') {
+                throw ValidationException::withMessages(['product_id' => ['Menu per porsi tidak memakai bahan atau resep.']]);
+            }
+            $recipe = DB::table('recipes')->where('product_id', $productId)->first();
+            if ($recipe && (int) ($data['recipe_id'] ?? 0) !== (int) $recipe->id) {
+                throw ValidationException::withMessages(['product_id' => ['Resep sudah ada. Gunakan Ubah Resep untuk memperbaruinya.']]);
+            }
+            foreach ($cleanIngredients as $ingredient) {
+                if (! $this->namedRecord('ingredients_stock', $ingredient['name'])) {
+                    DB::table('ingredients_stock')->insert([
+                        'name' => $ingredient['name'], 'unit' => $ingredient['unit'],
+                        'current_stock' => 0, 'max_stock' => 1, 'created_at' => now(), 'updated_at' => now(),
+                    ]);
+                }
+            }
+            $values = [
+                'prep_time' => $prepTime,
+                'ingredients' => json_encode($cleanIngredients, JSON_UNESCAPED_UNICODE),
+                'steps' => $steps,
                 'barista_note' => $baristaNote,
-                'updated_at'   => now(),
-                'created_at'   => now(),
-            ]
-        );
+                'updated_at' => now(),
+            ];
+            if ($recipe) {
+                DB::table('recipes')->where('id', $recipe->id)->update($values);
+            } else {
+                DB::table('recipes')->insert($values + ['product_id' => $productId, 'created_at' => now()]);
+            }
+        });
 
         return response()->json([
             'success' => true,
@@ -1567,7 +769,6 @@ class PosController extends Controller
 
     public function deleteRecipe(int $productId)
     {
-        $this->ensureExtendedSchema();
 
         DB::table('recipes')->where('product_id', $productId)->delete();
 
@@ -1579,10 +780,9 @@ class PosController extends Controller
 
     public function restockProduct(Request $request, int $id)
     {
-        $this->ensureExtendedSchema();
 
         $data = $request->validate([
-            'qty'  => ['required', 'integer', 'min:1', 'max:50000'],
+            'qty' => ['required', 'integer', 'min:1', 'max:50000'],
             'note' => ['nullable', 'string', 'max:255'],
         ]);
 
@@ -1601,22 +801,22 @@ class PosController extends Controller
             $newMaxStock = max((int) ($product->max_stock ?? 60), $newStock);
 
             DB::table('products')->where('id', $id)->update([
-                'stock'      => $newStock,
-                'max_stock'  => $newMaxStock,
+                'stock' => $newStock,
+                'max_stock' => $newMaxStock,
                 'updated_at' => now(),
             ]);
 
             DB::table('inventory_logs')->insert([
-                'product_id'   => $id,
+                'product_id' => $id,
                 'product_name' => $product->name,
-                'type'         => 'in',
-                'qty'          => $qty,
-                'stock_after'  => $newStock,
-                'note'         => $note,
-                'reference'    => 'RESTOCK',
-                'actor_name'   => $actorName,
-                'created_at'   => now(),
-                'updated_at'   => now(),
+                'type' => 'in',
+                'qty' => $qty,
+                'stock_after' => $newStock,
+                'note' => $note,
+                'reference' => 'RESTOCK',
+                'actor_name' => $actorName,
+                'created_at' => now(),
+                'updated_at' => now(),
             ]);
 
             return $newStock;
@@ -1627,9 +827,9 @@ class PosController extends Controller
         }
 
         return response()->json([
-            'success'   => true,
+            'success' => true,
             'new_stock' => $result,
-            'message'   => 'Stok berhasil ditambahkan.',
+            'message' => 'Stok berhasil ditambahkan.',
         ]);
     }
 
@@ -1656,6 +856,9 @@ class PosController extends Controller
     // potong bahan baku gudang
     private function deductRawMaterialsForProduct(int $productId, string $size, int $qty, string $orderCode = '', string $actorName = 'Kasir'): void
     {
+        if (DB::table('products')->where('id', $productId)->value('item_type') === 'perporsi') {
+            return;
+        }
         $recipe = DB::table('recipes')->where('product_id', $productId)->first();
         if (! $recipe) {
             return;
@@ -1670,7 +873,7 @@ class PosController extends Controller
 
         foreach ($ingredients as $ing) {
             $name = trim($ing['name'] ?? '');
-            $amountPerCup = $size === 'L' ? (float) ($ing['amount_l'] ?? 0) : (float) ($ing['amount_m'] ?? 0);
+            $amountPerCup = $size === 'L' ? (float) ($ing['amount_l'] ?? $ing['amount_m'] ?? 0) : (float) ($ing['amount_m'] ?? 0);
             $totalUse = $amountPerCup * $qty;
 
             if ($name === '' || $totalUse <= 0) {
@@ -1686,20 +889,20 @@ class PosController extends Controller
                 $newIngStock = max(0, (float) $stockRow->current_stock - $totalUse);
                 DB::table('ingredients_stock')->where('id', $stockRow->id)->update([
                     'current_stock' => $newIngStock,
-                    'updated_at'    => now(),
+                    'updated_at' => now(),
                 ]);
 
                 DB::table('inventory_logs')->insert([
-                    'product_id'   => (int) $stockRow->id,
+                    'product_id' => (int) $stockRow->id,
                     'product_name' => "Bahan: {$stockRow->name} ({$stockRow->unit})",
-                    'type'         => 'out',
-                    'qty'          => (int) round($totalUse),
-                    'stock_after'  => (int) round($newIngStock),
-                    'note'         => "Pemakaian {$qty}x {$prodName} ({$size}) • {$orderCode}",
-                    'reference'    => $orderCode ?: 'ORDER',
-                    'actor_name'   => $actorName,
-                    'created_at'   => now(),
-                    'updated_at'   => now(),
+                    'type' => 'out',
+                    'qty' => (int) round($totalUse),
+                    'stock_after' => (int) round($newIngStock),
+                    'note' => "Pemakaian {$qty}x {$prodName} ({$size}) • {$orderCode}",
+                    'reference' => $orderCode ?: 'ORDER',
+                    'actor_name' => $actorName,
+                    'created_at' => now(),
+                    'updated_at' => now(),
                 ]);
             }
         }
@@ -1707,21 +910,20 @@ class PosController extends Controller
 
     public function storeOrder(Request $request)
     {
-        $this->ensureExtendedSchema();
 
         $data = $request->validate([
-            'items'            => ['required', 'array', 'min:1', 'max:100'],
-            'items.*.id'       => ['required', 'integer', 'min:1'],
-            'items.*.qty'      => ['required', 'integer', 'min:1', 'max:500'],
-            'items.*.size'     => ['nullable', 'string', 'in:M,L'],
-            'items.*.sugar'    => ['nullable', 'string', 'in:' . implode(',', self::ALLOWED_SUGAR)],
-            'items.*.note'     => ['nullable', 'string', 'max:200'],
-            'promo_code'       => ['nullable', 'string', 'max:50'],
-            'customer_name'    => ['nullable', 'string', 'max:100'],
-            'order_type'       => ['nullable', 'string', 'in:dine_in,takeaway'],
-            'table_number'     => ['nullable', 'string', 'max:30'],
-            'payment_method'   => ['required', 'string', 'in:cash,qris'],
-            'cash_received'    => ['nullable', 'numeric', 'min:0', 'max:100000000'],
+            'items' => ['required', 'array', 'min:1', 'max:100'],
+            'items.*.id' => ['required', 'integer', 'min:1'],
+            'items.*.qty' => ['required', 'integer', 'min:1', 'max:500'],
+            'items.*.size' => ['nullable', 'string', 'in:M,L'],
+            'items.*.sugar' => ['nullable', 'string', 'in:'.implode(',', self::ALLOWED_SUGAR)],
+            'items.*.note' => ['nullable', 'string', 'max:200'],
+            'promo_code' => ['nullable', 'string', 'max:50'],
+            'customer_name' => ['nullable', 'string', 'max:100'],
+            'order_type' => ['nullable', 'string', 'in:dine_in,takeaway'],
+            'table_number' => ['nullable', 'string', 'max:30'],
+            'payment_method' => ['required', 'string', 'in:cash,qris'],
+            'cash_received' => ['nullable', 'numeric', 'min:0', 'max:100000000'],
         ]);
 
         $user = $request->user();
@@ -1733,15 +935,15 @@ class PosController extends Controller
 
         return DB::transaction(function () use ($data, $cashierId, $cashierName, $customerName, $orderType, $tableNumber) {
             $wib = now()->setTimezone('Asia/Jakarta');
-            $prefix = 'KS-' . $wib->format('Ymd');
+            $prefix = 'KS-'.$wib->format('Ymd');
             $escapedPrefix = addcslashes($prefix, '%_\\');
             $count = DB::table('orders')
                 ->where('code', 'like', "{$escapedPrefix}-%")
                 ->lockForUpdate()
                 ->count();
-            $orderCode = $prefix . '-' . str_pad((string) ($count + 1), 3, '0', STR_PAD_LEFT);
+            $orderCode = $prefix.'-'.str_pad((string) ($count + 1), 3, '0', STR_PAD_LEFT);
 
-            $enrichedMap = $this->availableProducts($this->enrichProductsWithStockCalculations(
+            $enrichedMap = $this->availableProducts(app(InventoryCalculator::class)->enrich(
                 DB::table('products')->where('active', 1)->lockForUpdate()->get()
             ))->keyBy('id');
 
@@ -1754,7 +956,7 @@ class PosController extends Controller
                 $prodId = (int) $reqItem['id'];
                 $qty = (int) $reqItem['qty'];
                 $size = $reqItem['size'] ?? 'M';
-                $sugar = $reqItem['sugar'] ?? '100%';
+                $sugar = array_key_exists('sugar', $reqItem) ? $reqItem['sugar'] : null;
                 $note = $this->cleanText($reqItem['note'] ?? '', 200);
 
                 $prod = $enrichedMap[$prodId] ?? null;
@@ -1765,16 +967,21 @@ class PosController extends Controller
                     ]);
                 }
 
+                if ($prod['item_type'] === 'perporsi') {
+                    $size = 'M';
+                    $sugar = null;
+                }
+
                 // cek kunci stok
-                if ($prod['is_locked']) {
+                if ($size === 'L' ? $prod['is_locked_l'] : $prod['is_locked_m']) {
                     throw ValidationException::withMessages([
-                        'items' => ["Menu {$prod['name']} terkunci karena stok kritis (tersisa {$prod['stock']} porsi / {$prod['stock_percent']}%)."],
+                        'items' => ["Menu {$prod['name']} ukuran {$size} terkunci karena bahan tidak cukup untuk satu porsi."],
                     ]);
                 }
 
                 $alreadyRequested = $stockDeductions[$prodId]['qty'] ?? 0;
-                $usableStock = max(0, (int) $prod['stock'] - 3);
-                if (($alreadyRequested + $qty) > (int) $prod['stock']) {
+                $usableStock = $size === 'L' ? (int) $prod['stock_l'] : (int) $prod['stock_m'];
+                if ($qty > $usableStock) {
                     throw ValidationException::withMessages([
                         'items' => ["Stok {$prod['name']} tidak mencukupi (tersedia {$usableStock} porsi yang dapat dipesan)."],
                     ]);
@@ -1784,20 +991,21 @@ class PosController extends Controller
                 $subtotal += $unitPrice * $qty;
 
                 $sanitizedItems[] = [
-                    'id'          => (int) $prod['id'],
-                    'name'        => $prod['name'],
-                    'category'    => $prod['category'],
-                    'item_type'   => $prod['item_type'],
-                    'size'        => $size,
-                    'sugar'       => $sugar,
-                    'note'        => $note,
-                    'unit_price'  => $unitPrice,
-                    'qty'         => $qty,
+                    'id' => (int) $prod['id'],
+                    'name' => $prod['name'],
+                    'category' => $prod['category'],
+                    'item_type' => $prod['item_type'],
+                    'size' => $size,
+                    'sugar' => $sugar,
+                    'note' => $note,
+                    'unit_price' => $unitPrice,
+                    'qty' => $qty,
+                    'stock_movements' => [],
                 ];
 
                 $stockDeductions[$prodId] = [
                     'product' => $prod,
-                    'qty'     => $alreadyRequested + $qty,
+                    'qty' => $alreadyRequested + $qty,
                 ];
 
                 // potong stok komponen paket
@@ -1809,13 +1017,27 @@ class PosController extends Controller
                             $prevCompQty = $stockDeductions[$compId]['qty'] ?? 0;
                             $stockDeductions[$compId] = [
                                 'product' => $enrichedMap[$compId],
-                                'qty'     => $prevCompQty + $compQty,
+                                'qty' => $prevCompQty + $compQty,
                             ];
-                            $recipeUsageList[] = ['product_id' => $compId, 'size' => $size, 'qty' => $compQty];
+                            if ($enrichedMap[$compId]['item_type'] !== 'perporsi') {
+                                $recipeUsageList[] = [
+                                    'product_id' => $compId, 'size' => $size, 'qty' => $compQty,
+                                ];
+                            }
                         }
                     }
-                } else {
-                    $recipeUsageList[] = ['product_id' => $prodId, 'size' => $size, 'qty' => $qty];
+                } elseif ($prod['item_type'] !== 'perporsi') {
+                    $recipeUsageList[] = [
+                        'product_id' => $prodId, 'size' => $size, 'qty' => $qty,
+                    ];
+                }
+            }
+
+            foreach ($stockDeductions as $deduction) {
+                if ($deduction['product']['item_type'] !== 'paketan' && empty($deduction['product']['recipe_summary']) && $deduction['qty'] > $deduction['product']['raw_stock']) {
+                    throw ValidationException::withMessages([
+                        'items' => ["Stok {$deduction['product']['name']} tidak cukup untuk gabungan pesanan ini."],
+                    ]);
                 }
             }
 
@@ -1832,7 +1054,7 @@ class PosController extends Controller
                 }
                 foreach ($ingList as $ing) {
                     $name = trim($ing['name'] ?? '');
-                    $amtPerCup = $usage['size'] === 'L' ? (float) ($ing['amount_l'] ?? 0) : (float) ($ing['amount_m'] ?? 0);
+                    $amtPerCup = $usage['size'] === 'L' ? (float) ($ing['amount_l'] ?? $ing['amount_m'] ?? 0) : (float) ($ing['amount_m'] ?? 0);
                     $useAmt = $amtPerCup * $usage['qty'];
                     if ($name === '' || $useAmt <= 0) {
                         continue;
@@ -1851,13 +1073,19 @@ class PosController extends Controller
                     ->lockForUpdate()
                     ->first();
 
-                if ($stockRow && $need['amount'] > (float) $stockRow->current_stock) {
+                if (! $stockRow) {
+                    throw ValidationException::withMessages([
+                        'items' => ["Stok bahan {$need['name']} tidak tersedia di gudang."],
+                    ]);
+                }
+                if ($need['amount'] > (float) $stockRow->current_stock) {
                     $avail = round((float) $stockRow->current_stock, 1);
                     $req = round($need['amount'], 1);
                     throw ValidationException::withMessages([
                         'items' => ["Stok bahan {$stockRow->name} tidak cukup untuk gabungan pesanan ini (butuh {$req} {$stockRow->unit}, tersisa {$avail} {$stockRow->unit})."],
                     ]);
                 }
+
             }
 
             $discount = 0;
@@ -1916,37 +1144,62 @@ class PosController extends Controller
 
             $changeAmount = $paymentMethod === 'cash' ? max(0, $cashReceived - $total) : 0;
 
+            foreach ($sanitizedItems as &$item) {
+                $product = $enrichedMap[$item['id']];
+                $components = $product['item_type'] === 'paketan' ? $product['bundle_items'] : [['product_id' => $item['id'], 'qty' => 1]];
+                foreach ($components as $component) {
+                    $componentProduct = $enrichedMap[$component['product_id']];
+                    if ($componentProduct['item_type'] === 'perporsi' || empty($componentProduct['recipe_summary'])) {
+                        $item['stock_movements'][] = [
+                            'product_id' => (int) $component['product_id'],
+                            'qty' => max(1, (int) ($component['qty'] ?? 1)) * $item['qty'],
+                        ];
+                    }
+                }
+            }
+            unset($item);
+
             $orderId = DB::table('orders')->insertGetId([
-                'code'           => $orderCode,
-                'cashier_id'     => $cashierId,
-                'cashier_name'   => $cashierName,
-                'customer_name'  => $customerName,
-                'order_type'     => $orderType,
-                'table_number'   => $tableNumber,
-                'items'          => json_encode($sanitizedItems, JSON_UNESCAPED_UNICODE),
-                'subtotal'       => $subtotal,
-                'discount'       => $discount,
-                'promo_code'     => $appliedPromoCode,
-                'tax'            => $tax,
-                'service'        => $service,
-                'total'          => $total,
+                'code' => $orderCode,
+                'cashier_id' => $cashierId,
+                'cashier_name' => $cashierName,
+                'customer_name' => $customerName,
+                'order_type' => $orderType,
+                'table_number' => $tableNumber,
+                'items' => json_encode($sanitizedItems, JSON_UNESCAPED_UNICODE),
+                'subtotal' => $subtotal,
+                'discount' => $discount,
+                'promo_code' => $appliedPromoCode,
+                'tax' => $tax,
+                'service' => $service,
+                'total' => $total,
                 'payment_method' => $paymentMethod,
-                'cash_received'  => $cashReceived,
-                'change_amount'  => $changeAmount,
-                'status'         => 'paid',
-                'created_at'     => now(),
-                'updated_at'     => now(),
+                'cash_received' => $cashReceived,
+                'change_amount' => $changeAmount,
+                'status' => 'paid',
+                'created_at' => now(),
+                'updated_at' => now(),
             ]);
 
             foreach ($stockDeductions as $prodId => $deduction) {
                 $prod = $deduction['product'];
                 $deductQty = $deduction['qty'];
+                if ($prod['item_type'] === 'paketan') {
+                    continue;
+                }
                 $newStock = max(0, (int) $prod['raw_stock'] - $deductQty);
 
                 DB::table('products')->where('id', $prodId)->update([
-                    'stock'      => $newStock,
+                    'stock' => $newStock,
                     'updated_at' => now(),
                 ]);
+                if ($prod['item_type'] === 'perporsi') {
+                    DB::table('inventory_logs')->insert([
+                        'product_id' => $prodId, 'product_name' => $prod['name'], 'type' => 'out',
+                        'qty' => $deductQty, 'stock_after' => $newStock, 'note' => 'Penjualan per porsi',
+                        'reference' => $orderCode, 'actor_name' => $cashierName, 'created_at' => now(), 'updated_at' => now(),
+                    ]);
+                }
             }
 
             // potong bahan gudang
@@ -1955,17 +1208,17 @@ class PosController extends Controller
             }
 
             return response()->json([
-                'success'       => true,
-                'order_code'    => $orderCode,
-                'order_id'      => $orderId,
-                'subtotal'      => $subtotal,
-                'discount'      => $discount,
-                'tax'           => $tax,
-                'service'       => $service,
-                'total'         => $total,
+                'success' => true,
+                'order_code' => $orderCode,
+                'order_id' => $orderId,
+                'subtotal' => $subtotal,
+                'discount' => $discount,
+                'tax' => $tax,
+                'service' => $service,
+                'total' => $total,
                 'cash_received' => $cashReceived,
                 'change_amount' => $changeAmount,
-                'items'         => $sanitizedItems,
+                'items' => $sanitizedItems,
             ], 201);
         });
     }
@@ -1973,7 +1226,6 @@ class PosController extends Controller
     // hapus bahan baku
     public function deleteIngredient(int $id)
     {
-        $this->ensureExtendedSchema();
 
         $deleted = DB::table('ingredients_stock')->where('id', $id)->delete();
         if (! $deleted) {
@@ -1989,7 +1241,6 @@ class PosController extends Controller
     // batalkan transaksi dan kembalikan stok
     public function voidOrder(Request $request, int $id)
     {
-        $this->ensureExtendedSchema();
         $actorName = $this->cleanText($request->user()?->name ?? 'Admin', 100);
 
         return DB::transaction(function () use ($id, $actorName) {
@@ -2007,6 +1258,21 @@ class PosController extends Controller
             }
 
             foreach ($items as $item) {
+                foreach ($item['stock_movements'] ?? [] as $movement) {
+                    $stockProduct = DB::table('products')->where('id', (int) $movement['product_id'])->lockForUpdate()->first();
+                    if ($stockProduct) {
+                        $restored = (int) $stockProduct->stock + (int) $movement['qty'];
+                        DB::table('products')->where('id', $stockProduct->id)->update([
+                            'stock' => $restored, 'max_stock' => max($restored, (int) $stockProduct->max_stock), 'updated_at' => now(),
+                        ]);
+                        DB::table('inventory_logs')->insert([
+                            'product_id' => $stockProduct->id, 'product_name' => $stockProduct->name, 'type' => 'in',
+                            'qty' => (int) $movement['qty'], 'stock_after' => $restored,
+                            'note' => 'Void penjualan stok porsi', 'reference' => $order->code, 'actor_name' => $actorName,
+                            'created_at' => now(), 'updated_at' => now(),
+                        ]);
+                    }
+                }
                 $prodId = (int) ($item['id'] ?? 0);
                 $qty = max(1, (int) ($item['qty'] ?? 1));
                 $size = ($item['size'] ?? 'M') === 'L' ? 'L' : 'M';
@@ -2025,7 +1291,7 @@ class PosController extends Controller
             }
 
             DB::table('orders')->where('id', $id)->update([
-                'status'     => 'void',
+                'status' => 'void',
                 'updated_at' => now(),
             ]);
 
@@ -2039,6 +1305,9 @@ class PosController extends Controller
     // kembalikan bahan baku gudang
     private function restoreRawMaterialsForProduct(int $productId, string $size, int $qty, string $orderCode, string $actorName): void
     {
+        if (DB::table('products')->where('id', $productId)->value('item_type') === 'perporsi') {
+            return;
+        }
         $recipe = DB::table('recipes')->where('product_id', $productId)->first();
         if (! $recipe) {
             return;
@@ -2052,7 +1321,7 @@ class PosController extends Controller
 
         foreach ($ingredients as $ing) {
             $name = trim($ing['name'] ?? '');
-            $amountPerCup = $size === 'L' ? (float) ($ing['amount_l'] ?? 0) : (float) ($ing['amount_m'] ?? 0);
+            $amountPerCup = $size === 'L' ? (float) ($ing['amount_l'] ?? $ing['amount_m'] ?? 0) : (float) ($ing['amount_m'] ?? 0);
             $totalRestore = $amountPerCup * $qty;
             if ($name === '' || $totalRestore <= 0) {
                 continue;
@@ -2068,21 +1337,21 @@ class PosController extends Controller
                 $newMax = max((float) $stockRow->max_stock, $newStock);
                 DB::table('ingredients_stock')->where('id', $stockRow->id)->update([
                     'current_stock' => $newStock,
-                    'max_stock'     => $newMax,
-                    'updated_at'    => now(),
+                    'max_stock' => $newMax,
+                    'updated_at' => now(),
                 ]);
 
                 DB::table('inventory_logs')->insert([
-                    'product_id'   => (int) $stockRow->id,
+                    'product_id' => (int) $stockRow->id,
                     'product_name' => "Bahan: {$stockRow->name} ({$stockRow->unit})",
-                    'type'         => 'in',
-                    'qty'          => (int) round($totalRestore),
-                    'stock_after'  => (int) round($newStock),
-                    'note'         => "Void {$qty}x {$prodName} ({$size}) • {$orderCode}",
-                    'reference'    => $orderCode ?: 'VOID',
-                    'actor_name'   => $actorName,
-                    'created_at'   => now(),
-                    'updated_at'   => now(),
+                    'type' => 'in',
+                    'qty' => (int) round($totalRestore),
+                    'stock_after' => (int) round($newStock),
+                    'note' => "Void {$qty}x {$prodName} ({$size}) • {$orderCode}",
+                    'reference' => $orderCode ?: 'VOID',
+                    'actor_name' => $actorName,
+                    'created_at' => now(),
+                    'updated_at' => now(),
                 ]);
             }
         }

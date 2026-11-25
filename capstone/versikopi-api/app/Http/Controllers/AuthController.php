@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
@@ -16,44 +17,32 @@ class AuthController extends Controller
     public function login(Request $request)
     {
         $data = $request->validate([
-            'email'    => ['required', 'string', 'email', 'max:190'],
+            'email' => ['required', 'string', 'email', 'max:190'],
             'password' => ['required', 'string', 'max:255'],
-            'role'     => ['required', 'string', 'in:kasir,admin'],
+            'role' => ['required', 'string', 'in:kasir,admin'],
         ]);
 
-        $throttleKey = 'login:' . Str::lower($data['email']) . '|' . $request->ip();
+        $throttleKey = 'login:'.Str::lower($data['email']).'|'.$request->ip();
 
         if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
             $seconds = RateLimiter::availableIn($throttleKey);
+
             return response()->json([
                 'message' => "Terlalu banyak percobaan login. Silakan coba lagi dalam {$seconds} detik.",
             ], 429);
-        }
-
-        if (User::count() === 0) {
-            User::create([
-                'name'     => 'Admin Versi Kopi',
-                'email'    => 'admin@versikopi.test',
-                'password' => Hash::make('password'),
-                'role'     => 'admin',
-            ]);
-            User::create([
-                'name'     => 'Kasir Versi Kopi',
-                'email'    => 'kasir@versikopi.test',
-                'password' => Hash::make('password'),
-                'role'     => 'kasir',
-            ]);
         }
 
         $user = User::where('email', $data['email'])->first();
 
         if (! $user || ! Hash::check($data['password'], $user->password)) {
             RateLimiter::hit($throttleKey, 60);
+
             return response()->json(['message' => 'Email atau password salah.'], 422);
         }
 
         if ($user->role !== $data['role']) {
             RateLimiter::hit($throttleKey, 60);
+
             return response()->json([
                 'message' => "Akun ini tidak memiliki akses sebagai {$data['role']}.",
             ], 403);
@@ -64,15 +53,15 @@ class AuthController extends Controller
         // hapus token lama
         $user->tokens()->where('name', 'versikopi')->delete();
 
-        $token = $user->createToken('versikopi', ['role:' . $user->role])->plainTextToken;
+        $token = $user->createToken('versikopi', ['role:'.$user->role])->plainTextToken;
 
         return response()->json([
             'token' => $token,
-            'user'  => [
-                'id'    => (int) $user->id,
-                'name'  => e($user->name),
+            'user' => [
+                'id' => (int) $user->id,
+                'name' => e($user->name),
                 'email' => e($user->email),
-                'role'  => $user->role,
+                'role' => $user->role,
             ],
         ]);
     }
@@ -83,10 +72,10 @@ class AuthController extends Controller
         $user = $request->user();
 
         return response()->json([
-            'id'    => (int) $user->id,
-            'name'  => $user->name,
+            'id' => (int) $user->id,
+            'name' => $user->name,
             'email' => $user->email,
-            'role'  => $user->role,
+            'role' => $user->role,
         ]);
     }
 
@@ -110,23 +99,23 @@ class AuthController extends Controller
     public function storeUser(Request $request)
     {
         $data = $request->validate([
-            'name'     => ['required', 'string', 'max:100'],
-            'email'    => ['required', 'string', 'email', 'max:190', 'unique:users,email'],
+            'name' => ['required', 'string', 'max:100'],
+            'email' => ['required', 'string', 'email', 'max:190', 'unique:users,email'],
             'password' => ['required', 'string', 'min:6', 'max:255'],
-            'role'     => ['required', 'string', 'in:kasir,admin'],
+            'role' => ['required', 'string', 'in:kasir,admin'],
         ]);
 
         $user = User::create([
-            'name'     => trim(strip_tags($data['name'])),
-            'email'    => Str::lower(trim($data['email'])),
+            'name' => trim(strip_tags($data['name'])),
+            'email' => Str::lower(trim($data['email'])),
             'password' => Hash::make($data['password']),
-            'role'     => $data['role'],
+            'role' => $data['role'],
         ]);
 
         return response()->json([
             'success' => true,
             'message' => "Akun {$user->name} berhasil ditambahkan.",
-            'user'    => $user->only(['id', 'name', 'email', 'role', 'created_at']),
+            'user' => $user->only(['id', 'name', 'email', 'role', 'created_at']),
         ], 201);
     }
 
@@ -139,10 +128,10 @@ class AuthController extends Controller
         }
 
         $data = $request->validate([
-            'name'     => ['required', 'string', 'max:100'],
-            'email'    => ['required', 'string', 'email', 'max:190', 'unique:users,email,' . $id],
+            'name' => ['required', 'string', 'max:100'],
+            'email' => ['required', 'string', 'email', 'max:190', 'unique:users,email,'.$id],
             'password' => ['nullable', 'string', 'min:6', 'max:255'],
-            'role'     => ['required', 'string', 'in:kasir,admin'],
+            'role' => ['required', 'string', 'in:kasir,admin'],
         ]);
 
         if ($user->role === 'admin' && $data['role'] !== 'admin' && User::where('role', 'admin')->count() <= 1) {
@@ -161,7 +150,7 @@ class AuthController extends Controller
         return response()->json([
             'success' => true,
             'message' => "Akun {$user->name} berhasil diperbarui.",
-            'user'    => $user->only(['id', 'name', 'email', 'role', 'created_at']),
+            'user' => $user->only(['id', 'name', 'email', 'role', 'created_at']),
         ]);
     }
 
@@ -173,10 +162,11 @@ class AuthController extends Controller
         ]);
 
         $email = Str::lower(trim($data['email']));
-        $throttleKey = 'forgot:' . $email . '|' . $request->ip();
+        $throttleKey = 'forgot:'.$email.'|'.$request->ip();
 
         if (RateLimiter::tooManyAttempts($throttleKey, 3)) {
             $seconds = RateLimiter::availableIn($throttleKey);
+
             return response()->json([
                 'message' => "Terlalu banyak permintaan reset. Coba lagi dalam {$seconds} detik.",
             ], 429);
@@ -192,7 +182,7 @@ class AuthController extends Controller
             DB::table('password_reset_tokens')->updateOrInsert(
                 ['email' => $email],
                 [
-                    'token'      => Hash::make($code),
+                    'token' => Hash::make($code),
                     'created_at' => now(),
                 ]
             );
@@ -203,8 +193,8 @@ class AuthController extends Controller
         }
 
         return response()->json([
-            'success'  => true,
-            'message'  => 'Jika email terdaftar, kode reset 6 digit telah dibuat (berlaku 10 menit).',
+            'success' => true,
+            'message' => 'Jika email terdaftar, kode reset 6 digit telah dibuat (berlaku 10 menit).',
             'dev_code' => $devCode,
         ]);
     }
@@ -213,16 +203,17 @@ class AuthController extends Controller
     public function resetPassword(Request $request)
     {
         $data = $request->validate([
-            'email'                 => ['required', 'string', 'email', 'max:190'],
-            'code'                  => ['required', 'string', 'size:6'],
-            'password'              => ['required', 'string', 'min:6', 'max:255', 'confirmed'],
+            'email' => ['required', 'string', 'email', 'max:190'],
+            'code' => ['required', 'string', 'size:6'],
+            'password' => ['required', 'string', 'min:6', 'max:255', 'confirmed'],
         ]);
 
         $email = Str::lower(trim($data['email']));
-        $throttleKey = 'reset:' . $email . '|' . $request->ip();
+        $throttleKey = 'reset:'.$email.'|'.$request->ip();
 
         if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
             $seconds = RateLimiter::availableIn($throttleKey);
+
             return response()->json([
                 'message' => "Terlalu banyak percobaan kode reset. Coba lagi dalam {$seconds} detik.",
             ], 429);
@@ -232,10 +223,11 @@ class AuthController extends Controller
 
         if (
             ! $record ||
-            now()->diffInMinutes($record->created_at) > 10 ||
+            Carbon::parse($record->created_at)->lte(now()->subMinutes(10)) ||
             ! Hash::check($data['code'], $record->token)
         ) {
             RateLimiter::hit($throttleKey, 60);
+
             return response()->json([
                 'message' => 'Kode reset tidak valid atau sudah kedaluwarsa.',
             ], 422);

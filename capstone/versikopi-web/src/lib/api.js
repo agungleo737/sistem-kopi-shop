@@ -3,7 +3,11 @@ import axios from 'axios'
 // sanitasi input
 const sanitizeValue = (val) => {
   if (typeof val === 'string') {
-    return val.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').replace(/<\/?[^>]+(>|$)/g, '').trim()
+    const withoutControlCharacters = Array.from(val).filter((character) => {
+      const code = character.charCodeAt(0)
+      return code === 9 || code === 10 || code === 13 || (code > 31 && code !== 127)
+    }).join('')
+    return withoutControlCharacters.replace(/<\/?[^>]+(>|$)/g, '').trim()
   }
   if (Array.isArray(val)) {
     return val.map(sanitizeValue)

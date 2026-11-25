@@ -9,15 +9,10 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 
-// endpoint publik
+// endpoint publik terbatas untuk halaman sebelum login
 Route::get('/branding', [PosController::class, 'getBranding']);
 Route::get('/branding/logo', [PosController::class, 'getStoreLogo']);
-Route::get('/settings', [PosController::class, 'getSettings']);
-Route::get('/promos', [PosController::class, 'getPromos']);
-Route::get('/products', [PosController::class, 'getProducts']);
 Route::get('/products/{id}/photo', [PosController::class, 'getProductPhoto'])->whereNumber('id');
-Route::get('/recipes', [PosController::class, 'getRecipes']);
-Route::get('/ingredients', [PosController::class, 'getIngredients']);
 
 // endpoint terproteksi
 Route::middleware('auth:sanctum')->group(function () {
@@ -26,6 +21,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // akses kasir dan admin
     Route::middleware('role:kasir,admin')->group(function () {
+        Route::get('/settings', [PosController::class, 'getSettings']);
+        Route::get('/promos', [PosController::class, 'getPromos']);
+        Route::get('/products', [PosController::class, 'getProducts']);
+        Route::get('/recipes', [PosController::class, 'getRecipes']);
+        Route::get('/ingredients', [PosController::class, 'getIngredients']);
         Route::get('/orders', [PosController::class, 'getOrders']);
         Route::post('/orders', [PosController::class, 'storeOrder']);
 

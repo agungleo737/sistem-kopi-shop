@@ -2,8 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 class StockWarningTest extends TestCase
@@ -12,6 +14,7 @@ class StockWarningTest extends TestCase
 
     public function test_stock_warning_uses_percentage_not_number_of_portions(): void
     {
+        Sanctum::actingAs(User::factory()->create(['role' => 'kasir']));
         DB::table('settings')->insert(['key' => 'catalog_version', 'value' => 'versikopi-official-v2']);
         $this->getJson('/api/products')->assertOk();
 

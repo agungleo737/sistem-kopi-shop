@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { useAuth } from '../context/AuthContext';
+import { useState, useEffect, useMemo } from 'react';
+import { useAuth } from '../context/useAuth';
 import api from '../lib/api';
 import {
   IconCup,
@@ -20,6 +20,9 @@ import { getProductImage } from '../lib/productImages';
 import { getStoreLogo } from '../lib/branding';
 import receiptLogo from '../assets/hitamputih.png';
 import { getMenuCategories } from '../lib/menuCategories';
+import { productHasSize } from '../lib/productHasSize.js';
+import { calculateInventory, getOrderableForProduct as getOrderable, normalizeQuantity } from '../lib/inventory.js';
+import QuantityInput from '../components/QuantityInput.jsx';
 
 const SUGAR_LEVELS = [
   { value: '100%', name: 'Normal' },
@@ -28,6 +31,39 @@ const SUGAR_LEVELS = [
   { value: '25%', name: 'Light' },
   { value: '0%', name: 'Tanpa Gula' },
 ];
+
+const FOOD_CATEGORIES = ['snack', 'pastry', 'makanan', 'food'];
+const FOOD_KEYWORDS = ['burger', 'kentang', 'fries', 'cireng', 'dimsum', 'roti', 'croissant', 'snack', 'pastry'];
+const DRINK_KEYWORDS = ['kopi', 'coffee', 'latte', 'americano', 'matcha', 'tea', 'teh', 'versi', 'caramel', 'hazelnut', 'butterscotch'];
+
+// cek apakah produk termasuk makanan (tanpa opsi gula dan tanpa medium/large)
+const isFoodProduct = (prod) => {
+  if (!prod) return false;
+  const cat = (prod.category || '').trim().toLowerCase();
+  if (FOOD_CATEGORIES.includes(cat)) return true;
+  if (prod.item_type === 'paketan') return false;
+  const name = (prod.name || '').toLowerCase();
+  return FOOD_KEYWORDS.some((kw) => name.includes(kw)) && !DRINK_KEYWORDS.some((kw) => name.includes(kw));
+};
+
+// cek apakah produk memakai opsi gula (minuman atau paket berisi minuman)
+const productHasSugar = (prod) => {
+  if (!prod || prod.item_type === 'perporsi' || isFoodProduct(prod)) return false;
+
+  if (prod.item_type === 'paketan') {
+    const bundles = Array.isArray(prod.bundle_items) ? prod.bundle_items : [];
+    if (bundles.length > 0) {
+      return bundles.some((b) => {
+        const bName = (b.name || '').toLowerCase();
+        return DRINK_KEYWORDS.some((kw) => bName.includes(kw));
+      });
+    }
+    const pName = (prod.name || '').toLowerCase();
+    return DRINK_KEYWORDS.some((kw) => pName.includes(kw));
+  }
+
+  return true;
+};
 
 const parseOrderItems = (rawItems) => {
   if (Array.isArray(rawItems)) return rawItems;
@@ -45,6 +81,8 @@ const parseOrderItems = (rawItems) => {
 export default function Kasir() {
   const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState('menu');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [cartOpen, setCartOpen] = useState(false);
 
   const [products, setProducts] = useState([]);
   const [ingredients, setIngredients] = useState([]);
@@ -137,142 +175,28 @@ export default function Kasir() {
     refreshData();
   }, []);
 
-  // hitung stok bahan bersama
-  const { liveProducts, liveIngredients } = useMemo(() => {
-    const ingMap = {};
-    ingredients.forEach((ing) => {
-      const key = (ing.name || '').trim().toLowerCase();
-      const cur = Number(ing.current_stock ?? ing.stock_amount ?? 0);
-      const max = Math.max(1, Number(ing.max_stock ?? ing.max_amount ?? cur));
-      ingMap[key] = {
-        ...ing,
-        current_stock: cur,
-        max_stock: max,
-      };
-    });
-
-    // kurangi stok dari keranjang
-    cart.forEach((cItem) => {
-      const prod = products.find((p) => Number(p.id) === Number(cItem.id));
-      if (!prod || !Array.isArray(prod.recipe_summary)) return;
-      prod.recipe_summary.forEach((rIng) => {
-        const key = (rIng.name || '').trim().toLowerCase();
-        const useAmt =
-          (cItem.size === 'L' ? Number(rIng.amount_l || rIng.amount_m || 0) : Number(rIng.amount_m || 0)) *
-          Number(cItem.qty || 1);
-        if (ingMap[key] && useAmt > 0) {
-          ingMap[key].current_stock = Math.max(0, ingMap[key].current_stock - useAmt);
-        }
-      });
-    });
-
-    const computedIngredients = Object.values(ingMap).map((ing) => {
-      const pct = Math.round((ing.current_stock / ing.max_stock) * 100);
-      return {
-        ...ing,
-        stock_amount: Math.round(ing.current_stock * 10) / 10,
-        max_amount: Math.round(ing.max_stock * 10) / 10,
-        stock_percent: pct,
-        is_locked: pct <= 5,
-        is_warning: pct > 5 && pct <= 20,
-      };
-    });
-
-    // hitung ulang porsi produk
-    const computedProducts = products.map((prod) => {
-      const recSummary = Array.isArray(prod.recipe_summary) ? prod.recipe_summary : [];
-      if (recSummary.length === 0) {
-        return prod;
-      }
-
-      let minPortions = null;
-      let maxPortions = null;
-      let minPct = null;
-      let limitingReason = null;
-
-      recSummary.forEach((rIng) => {
-        const key = (rIng.name || '').trim().toLowerCase();
-        const needM = Number(rIng.amount_m || 0);
-        const stockRow = ingMap[key];
-        if (!stockRow || needM <= 0) return;
-
-        const possible = Math.floor(stockRow.current_stock / needM);
-        const maxPoss = Math.max(1, Math.floor(stockRow.max_stock / needM));
-        const pct = Math.round((stockRow.current_stock / stockRow.max_stock) * 100);
-
-        if (minPortions === null || possible < minPortions) {
-          minPortions = possible;
-          maxPortions = maxPoss;
-          limitingReason = `${stockRow.name} (${Math.round(stockRow.current_stock)} ${stockRow.unit})`;
-        }
-        if (minPct === null || pct < minPct) {
-          minPct = pct;
-        }
-      });
-
-      if (minPortions === null) return prod;
-
-      const stockPct = minPct ?? 100;
-      const isLocked = minPortions <= 3 || stockPct <= 5;
-      const isWarning = !isLocked && stockPct <= 20;
-
-      return {
-        ...prod,
-        stock: minPortions,
-        max_stock: maxPortions ?? prod.max_stock ?? 60,
-        stock_percent: stockPct,
-        is_locked: isLocked,
-        is_warning: isWarning,
-        limiting_reason: limitingReason,
-      };
-    });
-
-    return { liveProducts: computedProducts, liveIngredients: computedIngredients };
-  }, [products, ingredients, cart]);
-
-  // cek sisa porsi sebelum batas kunci
-  const getOrderableForProduct = (prod, size = 'M') => {
-    if (!prod) return 0;
-    const recSummary = Array.isArray(prod.recipe_summary) ? prod.recipe_summary : [];
-    if (recSummary.length === 0) {
-      return Math.max(0, Number(prod.stock || 0) - 3);
-    }
-
-    let minOrderable = null;
-    recSummary.forEach((rIng) => {
-      const key = (rIng.name || '').trim().toLowerCase();
-      const need = size === 'L' ? Number(rIng.amount_l || rIng.amount_m || 0) : Number(rIng.amount_m || 0);
-      const ing = liveIngredients.find((i) => (i.name || '').trim().toLowerCase() === key);
-      if (!ing || need <= 0) return;
-
-      const totalPortionsNow = Math.floor(Number(ing.current_stock || 0) / need);
-      const maxPortionsCap = Math.max(1, Math.floor(Number(ing.max_stock || 1) / need));
-      const lockFloor = Math.max(3, Math.floor(maxPortionsCap * 0.05));
-      const canTake = Math.max(0, totalPortionsNow - lockFloor);
-
-      if (minOrderable === null || canTake < minOrderable) {
-        minOrderable = canTake;
-      }
-    });
-
-    return minOrderable ?? Math.max(0, Number(prod.stock || 0) - 3);
-  };
+  // Semua ukuran dan paket memakai stok bahan bersama, tanpa cadangan porsi.
+  const { liveProducts, liveIngredients } = useMemo(
+    () => calculateInventory(products, ingredients, cart),
+    [products, ingredients, cart]
+  );
+  const getOrderableForProduct = (prod, size = 'M') => getOrderable(prod, liveIngredients, size, liveProducts);
+  const applicableSizes = (prod) => productHasSize(prod, isFoodProduct(prod)) ? ['M', 'L'] : ['M'];
+  const availableSizes = (prod) => applicableSizes(prod).filter((size) => getOrderableForProduct(prod, size) > 0);
 
   // pisah menu satuan dan paketan
-  const satuanProducts = liveProducts.filter((p) => (p.item_type || 'satuan') === 'satuan');
+  const satuanProducts = liveProducts.filter((p) => p.item_type !== 'paketan');
   const paketanProducts = liveProducts.filter((p) => p.item_type === 'paketan');
 
   const activeTypeProducts = menuType === 'paketan' ? paketanProducts : satuanProducts;
   const categories = getMenuCategories(liveProducts);
 
   // peringatan dan kunci stok
-  const lockedProducts = liveProducts.filter(
-    (p) => p.is_locked || Number(p.stock) <= 3 || Number(p.stock_percent ?? 100) <= 5
-  );
+  const lockedProducts = liveProducts.filter((p) => availableSizes(p).length === 0);
   const warningProducts = liveProducts.filter(
     (p) =>
       !lockedProducts.some((lp) => lp.id === p.id) &&
-      Number(p.stock_percent ?? 100) <= 20
+      p.is_warning
   );
   const alertIngredients = liveIngredients.filter((ing) => ing.is_locked || ing.is_warning);
 
@@ -314,7 +238,7 @@ export default function Kasir() {
 
   // filter resep
   const recipedProducts = liveProducts.filter((prod) =>
-    recipes.some((r) => Number(r.product_id) === Number(prod.id))
+    prod.item_type !== 'perporsi' && recipes.some((r) => Number(r.product_id) === Number(prod.id))
   );
   const filteredRecipeProducts = recipedProducts.filter((prod) => {
     const matchCat = recipeCategory === 'Semua' || prod.category === recipeCategory;
@@ -335,12 +259,12 @@ export default function Kasir() {
   };
 
   const openProductModal = (prod) => {
-    const canAdd = getOrderableForProduct(prod, 'M');
-    if (prod.is_locked || canAdd <= 0) return;
+    const [size] = availableSizes(prod);
+    if (!size) return;
 
     setSelectedProduct(prod);
-    setSelectedSize('M');
-    setSelectedSugar('100%');
+    setSelectedSize(size);
+    setSelectedSugar(productHasSugar(prod) ? '100%' : null);
     setProductQty(1);
     setProductNote('');
   };
@@ -354,12 +278,15 @@ export default function Kasir() {
       return;
     }
 
+    const hasSugar = productHasSugar(selectedProduct);
+    const finalSugar = hasSugar ? (selectedSugar || '100%') : null;
     const cleanNote = productNote.replace(/<\/?[^>]+(>|$)/g, '').trim();
     const unitPrice = selectedSize === 'M' ? Number(selectedProduct.price_m) : Number(selectedProduct.price_l);
-    const cartItemId = `${selectedProduct.id}-${selectedSize}-${selectedSugar}-${cleanNote}`;
-    const qtyToAdd = Math.min(productQty, availableToAdd);
-
+    const cartItemId = `${selectedProduct.id}-${selectedSize}-${finalSugar || 'none'}-${cleanNote}`;
     const existingIndex = cart.findIndex((item) => item.cartItemId === cartItemId);
+    const limit = Math.min(availableToAdd, 500 - (existingIndex > -1 ? cart[existingIndex].qty : 0));
+    const qtyToAdd = normalizeQuantity(productQty, limit);
+    if (qtyToAdd < 1) return;
     if (existingIndex > -1) {
       const updated = [...cart];
       updated[existingIndex].qty += qtyToAdd;
@@ -376,7 +303,7 @@ export default function Kasir() {
           bundle_items: selectedProduct.bundle_items || [],
           gradient: selectedProduct.gradient,
           size: selectedSize,
-          sugar: selectedSugar,
+          sugar: finalSugar,
           note: cleanNote,
           unit_price: unitPrice,
           qty: qtyToAdd,
@@ -387,28 +314,25 @@ export default function Kasir() {
     setSelectedProduct(null);
   };
 
-  const updateCartQty = (cartItemId, delta) => {
+  const getCartQtyLimit = (item, currentCart = cart) => {
+    // Reclaim THIS row before computing a desired total, not just an increment.
+    const inventory = calculateInventory(products, ingredients, currentCart.filter((row) => row.cartItemId !== item.cartItemId));
+    const product = inventory.liveProducts.find((row) => row.id === item.id);
+    return Math.min(500, getOrderable(product, inventory.liveIngredients, item.size, inventory.liveProducts));
+  };
+
+  const setCartQty = (cartItemId, desired, delta = null) => {
     setCart((prev) => {
       const targetItem = prev.find((i) => i.cartItemId === cartItemId);
       if (!targetItem) return prev;
-
-      if (delta > 0) {
-        const liveProd = liveProducts.find((p) => p.id === targetItem.id);
-        const canAddMore = liveProd ? getOrderableForProduct(liveProd, targetItem.size) : 0;
-        if (canAddMore <= 0) return prev;
+      if (delta === -1 && targetItem.qty <= 1) {
+        return prev.filter((item) => item.cartItemId !== cartItemId);
       }
-
-      return prev
-        .map((item) => {
-          if (item.cartItemId === cartItemId) {
-            const next = item.qty + delta;
-            return next > 0 ? { ...item, qty: next } : null;
-          }
-          return item;
-        })
-        .filter(Boolean);
+      const next = normalizeQuantity(delta === null ? desired : targetItem.qty + delta, getCartQtyLimit(targetItem, prev));
+      return prev.flatMap((item) => item.cartItemId !== cartItemId ? [item] : next > 0 ? [{ ...item, qty: next }] : []);
     });
   };
+  const updateCartQty = (cartItemId, delta) => setCartQty(cartItemId, null, delta);
 
   const subtotal = cart.reduce((acc, item) => acc + item.unit_price * item.qty, 0);
 
@@ -549,8 +473,8 @@ export default function Kasir() {
         items: cart.map((c) => ({
           id: c.id,
           qty: c.qty,
-          size: c.size,
-          sugar: c.sugar,
+          size: productHasSize(c, isFoodProduct(c)) ? c.size : 'M',
+          sugar: productHasSugar(c) ? c.sugar : null,
           note: c.note,
         })),
         promo_code: appliedPromo ? appliedPromo.code : null,
@@ -598,17 +522,34 @@ export default function Kasir() {
   const selectedLiveProduct = selectedProduct
     ? liveProducts.find((p) => p.id === selectedProduct.id) || selectedProduct
     : null;
-  const selectedProductRecipe = selectedLiveProduct
+  const selectedProductRecipe = selectedLiveProduct && selectedLiveProduct.item_type !== 'perporsi'
     ? recipes.find((r) => Number(r.product_id) === Number(selectedLiveProduct.id))
     : null;
-  const selectedProductMaxAdd = selectedLiveProduct
-    ? getOrderableForProduct(selectedLiveProduct, selectedSize)
-    : 0;
+  const getModalMaxAdd = (product, size) => {
+    if (!product) return 0;
+    const sugar = productHasSugar(product) ? (selectedSugar || '100%') : 'none';
+    const note = productNote.replace(/<\/?[^>]+(>|$)/g, '').trim();
+    const existing = cart.find((item) => item.cartItemId === `${product.id}-${size}-${sugar}-${note}`);
+    return Math.min(getOrderableForProduct(product, size), 500 - (existing?.qty || 0));
+  };
+  const selectedProductMaxAdd = getModalMaxAdd(selectedLiveProduct, selectedSize);
+  const selectedQuantity = normalizeQuantity(productQty, selectedProductMaxAdd);
+
+  const selectedProductHasSugar = productHasSugar(selectedLiveProduct);
+  const selectedProductIsFood = isFoodProduct(selectedLiveProduct);
+  const selectedProductHasSize = productHasSize(selectedLiveProduct, selectedProductIsFood);
+  const totalCartItems = cart.reduce((a, b) => a + b.qty, 0);
 
   return (
     <div className="app">
+      {/* scrim sidebar mobile */}
+      <div
+        className={`sidebar-scrim ${sidebarOpen ? 'show' : ''}`}
+        onClick={() => setSidebarOpen(false)}
+      />
+
       {/* sidebar kasir */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-brand">
           <div className="logo-ring small">
             <img src={getStoreLogo(settings.logo_version)} alt="" />
@@ -617,13 +558,24 @@ export default function Kasir() {
             <strong>{settings.store_name || 'VERSI KOPI'}</strong>
             <small>Point of Sale</small>
           </div>
+          <button
+            type="button"
+            className="sidebar-close"
+            aria-label="Tutup menu"
+            onClick={() => setSidebarOpen(false)}
+          >
+            ✕
+          </button>
         </div>
 
         <nav className="nav">
           <button
             type="button"
             className={`nav-item ${activeTab === 'menu' ? 'active' : ''}`}
-            onClick={() => setActiveTab('menu')}
+            onClick={() => {
+              setActiveTab('menu');
+              setSidebarOpen(false);
+            }}
           >
             <span className="nav-icon">
               <IconCup size={18} />
@@ -636,7 +588,10 @@ export default function Kasir() {
           <button
             type="button"
             className={`nav-item ${activeTab === 'history' ? 'active' : ''}`}
-            onClick={() => setActiveTab('history')}
+            onClick={() => {
+              setActiveTab('history');
+              setSidebarOpen(false);
+            }}
           >
             <span className="nav-icon">
               <IconReceipt size={18} />
@@ -646,7 +601,10 @@ export default function Kasir() {
           <button
             type="button"
             className={`nav-item ${activeTab === 'promos' ? 'active' : ''}`}
-            onClick={() => setActiveTab('promos')}
+            onClick={() => {
+              setActiveTab('promos');
+              setSidebarOpen(false);
+            }}
           >
             <span className="nav-icon">
               <IconTag size={18} />
@@ -657,7 +615,10 @@ export default function Kasir() {
           <button
             type="button"
             className={`nav-item ${activeTab === 'recipes' ? 'active' : ''}`}
-            onClick={() => setActiveTab('recipes')}
+            onClick={() => {
+              setActiveTab('recipes');
+              setSidebarOpen(false);
+            }}
           >
             <span className="nav-icon">
               <IconBook size={18} />
@@ -676,6 +637,16 @@ export default function Kasir() {
       {/* konten utama */}
       <main className="app-main">
         <header className="topbar">
+          <button
+            type="button"
+            className="hamburger"
+            aria-label="Buka navigasi"
+            onClick={() => setSidebarOpen(true)}
+          >
+            <span />
+            <span />
+            <span />
+          </button>
           <div className="topbar-title">
             <h1>
               {activeTab === 'menu'
@@ -717,7 +688,7 @@ export default function Kasir() {
                         <strong>Status Stok Bahan Gudang:</strong>
                         {lockedProducts.length > 0 && (
                           <span className="pos-alert-chip locked">
-                            <IconLock size={12} /> {lockedProducts.length} Menu Terkunci (≤5% / ≤3)
+                            <IconLock size={12} /> {lockedProducts.length} Menu Terkunci (Tidak cukup 1 porsi)
                           </span>
                         )}
                         {warningProducts.length > 0 && (
@@ -739,7 +710,7 @@ export default function Kasir() {
                       <div className="pos-alert-drawer">
                         {lockedProducts.length > 0 && (
                           <div className="pos-alert-section">
-                            <small>Terkunci Otomatis (Sisa ≤ 5% atau ≤ 3 porsi):</small>
+                            <small>Terkunci Otomatis (Bahan tidak cukup untuk 1 porsi):</small>
                             <div className="pos-alert-pill-list">
                               {lockedProducts.map((p) => (
                                 <span key={p.id} className="pos-mini-alert locked">
@@ -857,11 +828,11 @@ export default function Kasir() {
                         .reduce((sum, item) => sum + item.qty, 0);
                       const isAdded = justAddedId === p.id;
                       const stockPct = Number(p.stock_percent ?? 100);
-                      const isLockedProduct = Boolean(p.is_locked || p.stock <= 3 || stockPct <= 5);
+                      const remainingOrderable = Math.max(...applicableSizes(p).map((size) => getOrderableForProduct(p, size)));
+                      const isLockedProduct = remainingOrderable < 1;
                       const isWarningProduct =
-                        !isLockedProduct && stockPct <= 20;
-                      const remainingOrderable = getOrderableForProduct(p, 'M');
-                      const isButtonLocked = isLockedProduct || remainingOrderable <= 0;
+                        !isLockedProduct && p.is_warning;
+                      const isButtonLocked = isLockedProduct;
 
                       return (
                         <article
@@ -889,8 +860,8 @@ export default function Kasir() {
                               >
                                 <i className="pos-stock-ind" />
                                 {isLockedProduct
-                                  ? `Terkunci • ${p.stock} (${stockPct}%)`
-                                  : `${p.stock} porsi • ${stockPct}%`}
+                                  ? `Terkunci • 0 porsi (${stockPct}%)`
+                                  : `${remainingOrderable} porsi • ${stockPct}%`}
                               </span>
                             </div>
 
@@ -942,7 +913,7 @@ export default function Kasir() {
                             <div className="pos-meter-wrap">
                               <div className="pos-meter-labels">
                                 <span>
-                                  {p.limiting_reason
+                                  {p.item_type === 'perporsi' ? 'Stok per porsi' : p.limiting_reason
                                     ? `Bahan: ${p.limiting_reason}`
                                     : 'Stok bahan baku'}
                                 </span>
@@ -961,7 +932,13 @@ export default function Kasir() {
                             {/* harga dan tombol tambah */}
                             <div className="pos-card-foot">
                               <div className="pos-price-block">
-                                <small>{p.item_type === 'paketan' ? 'Harga Paket' : 'Regular (M)'}</small>
+                                <small>
+                                  {p.item_type === 'paketan'
+                                    ? 'Harga Paket'
+                                    : isFoodProduct(p) || p.item_type === 'perporsi'
+                                    ? 'Harga Porsi'
+                                    : 'Regular (M)'}
+                                </small>
                                 <strong>Rp {Number(p.price_m).toLocaleString('id-ID')}</strong>
                               </div>
 
@@ -973,9 +950,7 @@ export default function Kasir() {
                                 disabled={isButtonLocked}
                                 title={
                                   isLockedProduct
-                                    ? `Terkunci otomatis (sisa ${p.stock} porsi / ${stockPct}%)`
-                                    : remainingOrderable <= 0
-                                    ? 'Mencapai batas kunci stok aman (sisa 3 porsi)'
+                                    ? p.item_type === 'perporsi' ? 'Stok porsi habis' : 'Stok tidak cukup untuk 1 porsi pada ukuran yang tersedia'
                                     : `Tambah ${p.name}`
                                 }
                                 aria-label={`Tambah ${p.name}`}
@@ -1002,11 +977,17 @@ export default function Kasir() {
                 )}
               </div>
 
+              {/* scrim keranjang tablet/hp */}
+              <div
+                className={`cart-scrim ${cartOpen ? 'open' : ''}`}
+                onClick={() => setCartOpen(false)}
+              />
+
               {/* keranjang pesanan */}
-              <aside className="cart-panel">
+              <aside className={`cart-panel ${cartOpen ? 'open' : ''}`}>
                 <div className="cart-head">
                   <h3>Ringkasan Pesanan</h3>
-                  <span className="cart-count">{cart.reduce((a, b) => a + b.qty, 0)} item</span>
+                  <span className="cart-count">{totalCartItems} item</span>
                   {cart.length > 0 && (
                     <button
                       type="button"
@@ -1020,6 +1001,14 @@ export default function Kasir() {
                       Bersihkan
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className="cart-close-mobile"
+                    aria-label="Tutup keranjang"
+                    onClick={() => setCartOpen(false)}
+                  >
+                    ✕
+                  </button>
                 </div>
 
                 <div className="cart-items">
@@ -1033,8 +1022,8 @@ export default function Kasir() {
                     </div>
                   ) : (
                     cart.map((item) => {
-                      const liveProd = liveProducts.find((p) => p.id === item.id);
-                      const canIncrement = liveProd ? getOrderableForProduct(liveProd, item.size) > 0 : false;
+                      const maxQty = getCartQtyLimit(item);
+                      const canIncrement = item.qty < maxQty;
 
                       return (
                         <div key={item.cartItemId} className="cart-item">
@@ -1050,7 +1039,13 @@ export default function Kasir() {
                               {item.item_type === 'paketan' && <span className="ci-type-badge">Paket</span>}
                             </div>
                             <div className="ci-meta">
-                              Ukuran {item.size} • Gula {item.sugar} {item.note && `• ${item.note}`}
+                              {[
+                                productHasSize(item, isFoodProduct(item)) ? `Ukuran ${item.size}` : null,
+                                item.sugar ? `Gula ${item.sugar}` : null,
+                                item.note || null,
+                              ]
+                                .filter(Boolean)
+                                .join(' • ') || (item.item_type === 'perporsi' ? 'Per Porsi' : isFoodProduct(item) ? 'Makanan' : 'Paket')}
                             </div>
                             <div className="ci-bottom">
                               <span className="ci-price">
@@ -1060,16 +1055,24 @@ export default function Kasir() {
                                 <button
                                   type="button"
                                   className="qty-btn"
+                                  aria-label={`Kurangi jumlah ${item.name} ${item.size}`}
                                   onClick={() => updateCartQty(item.cartItemId, -1)}
                                 >
                                   −
                                 </button>
-                                <span className="qty-value">{item.qty}</span>
+                                <QuantityInput
+                                  key={`${item.qty}-${maxQty}`}
+                                  value={item.qty}
+                                  max={maxQty}
+                                  label={`Jumlah ${item.name} ${item.size}`}
+                                  onCommit={(qty) => setCartQty(item.cartItemId, qty)}
+                                />
                                 <button
                                   type="button"
                                   className="qty-btn"
+                                  aria-label={`Tambah jumlah ${item.name} ${item.size}`}
                                   disabled={!canIncrement}
-                                  title={!canIncrement ? 'Mencapai batas stok terkunci' : 'Tambah jumlah'}
+                                  title={!canIncrement ? 'Mencapai stok tersedia atau batas 500 item' : 'Tambah jumlah'}
                                   onClick={() => updateCartQty(item.cartItemId, 1)}
                                 >
                                   +
@@ -1156,6 +1159,7 @@ export default function Kasir() {
                       className="checkout-btn"
                       onClick={() => {
                         setCheckoutError('');
+                        setCartOpen(false);
                         setIsCheckoutOpen(true);
                       }}
                     >
@@ -1165,6 +1169,20 @@ export default function Kasir() {
                   </div>
                 )}
               </aside>
+
+              {/* tombol keranjang mengambang untuk ipad/hp */}
+              <button
+                type="button"
+                className="floating-cart"
+                onClick={() => setCartOpen(true)}
+              >
+                <IconBag size={17} />
+                <span>Pesanan</span>
+                <span className="fc-badge">{totalCartItems}</span>
+                {total > 0 && (
+                  <span className="fc-total">Rp {total.toLocaleString('id-ID')}</span>
+                )}
+              </button>
             </div>
           )}
 
@@ -1173,7 +1191,7 @@ export default function Kasir() {
             <div>
               <div className="section-head">
                 <div>
-                  <h2>Riwayat Transaksi</h2>
+
                   <p>Cari pesanan berdasarkan nomor struk, nama menu yang dipesan, atau metode pembayaran.</p>
                 </div>
               </div>
@@ -1276,7 +1294,7 @@ export default function Kasir() {
             <div>
               <div className="section-head">
                 <div>
-                  <h2>Daftar & Pengelolaan Promo Toko</h2>
+
                   <p>Tambahkan kode voucher baru, atur diskon persen atau potongan harga, dan terapkan ke pesanan.</p>
                 </div>
                 <div className="head-action">
@@ -1390,7 +1408,7 @@ export default function Kasir() {
             <div>
               <div className="section-head">
                 <div>
-                  <h2>Resep & Takaran</h2>
+
                   <p>Stok bahan baku</p>
                 </div>
               </div>
@@ -1614,7 +1632,11 @@ export default function Kasir() {
             <div className="modal-head">
               <div>
                 <h3>Detail Pesanan {selectedLiveProduct.item_type === 'paketan' ? 'Paketan' : 'Menu'}</h3>
-                <p>Sesuaikan ukuran, tingkat kemanisan, dan catatan khusus</p>
+                <p>
+                  {selectedProductHasSugar
+                    ? 'Sesuaikan ukuran, tingkat kemanisan, dan catatan khusus'
+                    : 'Sesuaikan porsi dan catatan khusus pesanan'}
+                </p>
               </div>
               <button type="button" className="modal-close" onClick={() => setSelectedProduct(null)}>
                 ✕
@@ -1640,7 +1662,7 @@ export default function Kasir() {
                   <h4 className="pm-title">{selectedLiveProduct.name}</h4>
                   <p className="pm-desc">{selectedLiveProduct.description}</p>
                   <div className="pm-stock-info">
-                    Stok efektif saat ini: <strong>{selectedLiveProduct.stock} porsi ({selectedLiveProduct.stock_percent ?? 100}%)</strong> •
+                    {selectedProductHasSize ? `Stok ukuran ${selectedSize}` : 'Stok porsi'}: <strong>{getOrderableForProduct(selectedLiveProduct, selectedSize)} porsi ({selectedLiveProduct.stock_percent ?? 100}%)</strong> •
                     Dapat dipesan maks. <strong>{selectedProductMaxAdd} porsi</strong> lagi
                   </div>
                 </div>
@@ -1661,51 +1683,65 @@ export default function Kasir() {
                   </div>
                 )}
 
-              <div className="option-group">
-                <div className="option-label">Ukuran Cup / Porsi</div>
-                <div className="size-grid">
-                  <button
-                    type="button"
-                    className={`size-option ${selectedSize === 'M' ? 'active' : ''}`}
-                    onClick={() => {
-                      setSelectedSize('M');
-                      setProductQty(1);
-                    }}
-                  >
-                    <span className="size-letter">M</span>
-                    <span className="size-text">
-                      <strong>Regular (M)</strong>
-                      <small>Rp {Number(selectedLiveProduct.price_m).toLocaleString('id-ID')}</small>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`size-option ${selectedSize === 'L' ? 'active' : ''}`}
-                    onClick={() => {
-                      setSelectedSize('L');
-                      setProductQty(1);
-                    }}
-                  >
-                    <span className="size-letter">L</span>
-                    <span className="size-text">
-                      <strong>Large (L)</strong>
-                      <small>Rp {Number(selectedLiveProduct.price_l).toLocaleString('id-ID')}</small>
-                    </span>
-                  </button>
+              {selectedProductHasSize ? (
+                <div className="option-group">
+                  <div className="option-label">Ukuran Cup</div>
+                  <div className="size-grid">
+                    <button
+                      type="button"
+                      className={`size-option ${selectedSize === 'M' ? 'active' : ''}`}
+                      disabled={getOrderableForProduct(selectedLiveProduct, 'M') < 1}
+                      onClick={() => {
+                        setSelectedSize('M');
+                        setProductQty(normalizeQuantity(productQty, getModalMaxAdd(selectedLiveProduct, 'M')));
+                      }}
+                    >
+                      <span className="size-letter">M</span>
+                      <span className="size-text">
+                        <strong>Regular (M)</strong>
+                        <small>Rp {Number(selectedLiveProduct.price_m).toLocaleString('id-ID')}</small>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`size-option ${selectedSize === 'L' ? 'active' : ''}`}
+                      disabled={getOrderableForProduct(selectedLiveProduct, 'L') < 1}
+                      onClick={() => {
+                        setSelectedSize('L');
+                        setProductQty(normalizeQuantity(productQty, getModalMaxAdd(selectedLiveProduct, 'L')));
+                      }}
+                    >
+                      <span className="size-letter">L</span>
+                      <span className="size-text">
+                        <strong>Large (L)</strong>
+                        <small>Rp {Number(selectedLiveProduct.price_l).toLocaleString('id-ID')}</small>
+                      </span>
+                    </button>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="option-group">
+                  <div className="option-label">
+                    {selectedLiveProduct.item_type === 'paketan' ? 'Harga Paket' : 'Harga Porsi'}
+                  </div>
+                  <div className="pm-price" style={{ marginTop: 0 }}>
+                    Rp {Number(selectedLiveProduct.price_m).toLocaleString('id-ID')}
+                  </div>
+                </div>
+              )}
 
               {selectedProductRecipe && (
                 <div className="option-group">
                   <div className="option-label">
-                    Pemakaian Bahan Baku Gudang ({selectedSize === 'M' ? 'Regular M' : 'Large L'} × {productQty})
+                    Pemakaian Bahan Baku Gudang (
+                    {selectedProductHasSize ? (selectedSize === 'M' ? 'Regular M' : 'Large L') : 'Standar'} × {selectedQuantity})
                   </div>
                   <div className="order-items-preview">
                     {selectedProductRecipe.ingredients.map((ing, i) => (
                       <span key={i} className="order-item-pill">
                         {ing.name}:{' '}
                         <strong>
-                          {(Number(selectedSize === 'M' ? ing.amount_m : ing.amount_l) || 0) * productQty}{' '}
+                          {(Number(selectedSize === 'M' ? ing.amount_m : ing.amount_l) || 0) * selectedQuantity}{' '}
                           {ing.unit}
                         </strong>
                       </span>
@@ -1714,22 +1750,24 @@ export default function Kasir() {
                 </div>
               )}
 
-              <div className="option-group">
-                <div className="option-label">Takaran Gula</div>
-                <div className="sugar-grid">
-                  {SUGAR_LEVELS.map((sug) => (
-                    <button
-                      key={sug.value}
-                      type="button"
-                      className={`sugar-option ${selectedSugar === sug.value ? 'active' : ''}`}
-                      onClick={() => setSelectedSugar(sug.value)}
-                    >
-                      <span className="sugar-value">{sug.value}</span>
-                      <span className="sugar-name">{sug.name}</span>
-                    </button>
-                  ))}
+              {selectedProductHasSugar && (
+                <div className="option-group">
+                  <div className="option-label">Takaran Gula</div>
+                  <div className="sugar-grid">
+                    {SUGAR_LEVELS.map((sug) => (
+                      <button
+                        key={sug.value}
+                        type="button"
+                        className={`sugar-option ${selectedSugar === sug.value ? 'active' : ''}`}
+                        onClick={() => setSelectedSugar(sug.value)}
+                      >
+                        <span className="sugar-value">{sug.value}</span>
+                        <span className="sugar-name">{sug.name}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div className="qty-and-note">
                 <div>
@@ -1737,16 +1775,24 @@ export default function Kasir() {
                   <div className="qty-large">
                     <button
                       type="button"
-                      disabled={productQty <= 1}
-                      onClick={() => setProductQty((q) => q - 1)}
+                      aria-label="Kurangi jumlah pesanan"
+                      disabled={selectedQuantity <= 1}
+                      onClick={() => setProductQty(normalizeQuantity(selectedQuantity - 1, selectedProductMaxAdd))}
                     >
                       −
                     </button>
-                    <span>{productQty}</span>
+                    <QuantityInput
+                      key={`${selectedSize}-${selectedQuantity}-${selectedProductMaxAdd}`}
+                      value={selectedQuantity}
+                      max={selectedProductMaxAdd}
+                      label="Jumlah pesanan"
+                      onCommit={setProductQty}
+                    />
                     <button
                       type="button"
-                      disabled={productQty >= selectedProductMaxAdd}
-                      onClick={() => setProductQty((q) => q + 1)}
+                      aria-label="Tambah jumlah pesanan"
+                      disabled={selectedQuantity >= selectedProductMaxAdd}
+                      onClick={() => setProductQty(normalizeQuantity(selectedQuantity + 1, selectedProductMaxAdd))}
                     >
                       +
                     </button>
@@ -1757,7 +1803,11 @@ export default function Kasir() {
                   <input
                     type="text"
                     maxLength={120}
-                    placeholder="Contoh: Less ice, pisah es"
+                    placeholder={
+                      selectedProductHasSugar
+                        ? 'Contoh: Less ice, pisah es'
+                        : 'Contoh: Saus pedas, tanpa bawang'
+                    }
                     value={productNote}
                     onChange={(e) => setProductNote(e.target.value)}
                   />
@@ -1943,7 +1993,8 @@ export default function Kasir() {
                       <div key={idx} className="receipt-item">
                         <div className="receipt-row">
                           <span className="receipt-item-name">
-                            {it.name} ({it.size || 'M'}) ×{it.qty}
+                            {it.name}
+                            {productHasSize(it, isFoodProduct(it)) ? ` (${it.size || 'M'})` : ''} ×{it.qty}
                           </span>
                           <span className="r">
                             Rp {(Number(it.unit_price || 0) * Number(it.qty || 1)).toLocaleString('id-ID')}
@@ -1951,7 +2002,7 @@ export default function Kasir() {
                         </div>
                         {(it.sugar || it.note) && (
                           <div className="receipt-item-meta">
-                            Gula {it.sugar || '100%'} {it.note ? `• ${it.note}` : ''}
+                            {[it.sugar ? `Gula ${it.sugar}` : null, it.note || null].filter(Boolean).join(' • ')}
                           </div>
                         )}
                       </div>

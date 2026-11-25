@@ -18,7 +18,7 @@
 
 3. **Peringatan Stok Menipis & Kunci Otomatis (*Auto-Lock*)**
    - **Peringatan Kuning (*Warning*)**: Muncul otomatis di Admin & Kasir saat persentase stok `≤ 20%` dan belum terkunci.
-   - **Kunci Otomatis (*Locked*)**: Tombol tambah pesanan di Kasir otomatis terkunci saat sisa stok `≤ 5%` atau `≤ 3 porsi`.
+   - **Kunci Otomatis (*Locked*)**: Ukuran menu terkunci hanya jika salah satu bahan tidak cukup untuk membuat **1 porsi lengkap** sesuai resep. Stok boleh dipakai sampai porsi terakhir; tidak ada cadangan wajib 3 porsi atau 5%. Persentase hanya menjadi peringatan.
 
 4. **Katalog Menu Terbagi Dua (Menu Satuan & Menu Paketan / Bundling)**
    - Menampilkan **21 Menu Satuan** (*Signature, Coffee, Non-Coffee, Snack*) dan **6 Menu Paketan (*Paket Hemat*)** dalam tampilan grid 2 kolom kanan-kiri lengkap dengan foto produk asli dan fitur pencarian (*search*) di setiap halaman.
@@ -28,6 +28,7 @@
 
 6. **Transaksi Kasir & Cetak Struk Thermal 80mm**
    - Mendukung pembayaran **Tunai (Cash)** dengan hitung kembalian otomatis dan **QRIS**, dilengkapi fitur cetak struk langsung dari browser.
+   - Jumlah pesanan dapat diketik langsung atau diubah dengan tombol +/−, dibatasi oleh ketersediaan bahan bersama dan ukuran yang dipilih.
 
 ---
 
@@ -47,7 +48,7 @@ $$\text{Stok Paket} = \min_{k} \left( \left\lfloor \frac{\text{Stok GudangSaat I
 ### 3. Persentase & Ambang Peringatan / Kunci Otomatis
 $$\text{Persentase Bahan } i = \text{round}\left( \frac{\text{Stok Saat Ini}_i}{\text{Kapasitas Penuh (100\%)}_i} \times 100 \right)$$
 
-- **Status Terkunci (*Locked*)**: $\text{Stok Porsi} \le 3 \quad \text{ATAU} \quad \text{Persentase Stok} \le 5\%$
+- **Status Terkunci (*Locked*)**: $\text{Stok Porsi untuk Ukuran yang Dipilih} < 1$. Contoh: resep membutuhkan susu 100 ml dan kopi 1 gr; susu 96 ml dengan kopi 5 gr tidak cukup, tetapi susu tepat 100 ml masih boleh dijual sebagai 1 porsi. Stok setiap bahan dihitung bersama untuk seluruh isi keranjang.
 - **Status Menipis (*Warning*)**: $\text{Persentase Stok} \le 20\%$ dan belum terkunci.
 
 ---
@@ -93,7 +94,7 @@ $$\text{Persentase Bahan } i = \text{round}\left( \frac{\text{Stok Saat Ini}_i}{
 
 ## Teknologi yang Digunakan
 
-- **Backend API (`capstone/versikopi-api`)**: PHP 8.2+, Laravel 12, Laravel Sanctum, MariaDB / MySQL (`versikopi_db`).
+- **Backend API (`capstone/versikopi-api`)**: PHP 8.3+, Laravel 13, Laravel Sanctum, MariaDB / MySQL (`versikopi_db`).
 - **Frontend Web (`capstone/versikopi-web`)**: React 19, Vite 8, React Router v7, Axios.
 - **Database Schema**: Tersedia migrasi Laravel otomatis serta file SQL siap impor di `capstone/database_mariadb_versikopi.sql`.
 
@@ -103,6 +104,9 @@ $$\text{Persentase Bahan } i = \text{round}\left( \frac{\text{Stok Saat Ini}_i}{
 
 ### 1. Persiapan Database MariaDB / MySQL
 Nyalakan **MariaDB / MySQL** di Laragon atau XAMPP, lalu klik 2x file `capstone/AKTIFKAN_MARIADB.bat` (atau jalankan manual):
+
+Sebelum seeding pertama, isi `VERSIKOPI_ADMIN_EMAIL` dan `VERSIKOPI_ADMIN_PASSWORD` di `versikopi-api/.env`. Password admin awal harus minimal 12 karakter. Seeder tidak membuat akun dengan kredensial bawaan dan tidak mengubah password admin yang sudah ada. Buat akun kasir setelah masuk sebagai admin.
+
 ```bash
 cd capstone/versikopi-api
 php artisan migrate --seed --force
@@ -119,9 +123,6 @@ Buka browser di **`http://localhost:5173`**.
 
 ---
 
-## Akun Login Default
+## Akun Login Pertama
 
-| Role | Email | Password |
-|:---|:---|:---|
-| **Admin / Owner** | `admin@versikopi.test` | `password` |
-| **Kasir / Barista** | `kasir@versikopi.test` | `password` |
+Tidak ada akun atau password login default. Akun admin awal dibuat dari nilai `VERSIKOPI_ADMIN_EMAIL` dan `VERSIKOPI_ADMIN_PASSWORD` yang kamu isi sendiri di file `versikopi-api/.env` sebelum seeding database. Setelah login, buat akun kasir melalui menu Kelola Akun.

@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useAuth } from '../context/AuthContext';
+import { useCallback, useState, useEffect, useRef } from 'react';
+import { useAuth } from '../context/useAuth';
 import api from '../lib/api';
 import {
   IconChart,
@@ -14,12 +14,14 @@ import {
   IconLock,
   IconAlert,
   IconLayers,
-  ProductIllustration,
+
 } from '../components/Icons';
 import { getProductImage } from '../lib/productImages';
 import receiptLogo from '../assets/hitamputih.png';
 import { getStoreLogo } from '../lib/branding';
 import { getMenuCategories } from '../lib/menuCategories';
+import { productHasSize } from '../lib/productHasSize.js';
+import { findDuplicateName, hasDuplicateNames, apiErrorMessage } from '../lib/inventory.js';
 
 const GRADIENTS = [
   { label: 'Karamel Lembut', value: '#D8B493,#A67C58' },
@@ -32,10 +34,12 @@ const GRADIENTS = [
 
 const CATEGORIES = ['Signature', 'Coffee', 'Non-Coffee', 'Pastry', 'Snack', 'Bundling'];
 const RECIPE_UNITS = ['ml', 'gr', 'shot', 'pump', 'pcs', 'sdm', 'sdt'];
+const isFoodCategory = (cat) => ['snack', 'pastry', 'makanan', 'food'].includes((cat || '').trim().toLowerCase());
 
 export default function Admin() {
   const { logout } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const [products, setProducts] = useState([]);
   const [ingredients, setIngredients] = useState([]);
@@ -79,6 +83,7 @@ export default function Admin() {
   const [newProductCategory, setNewProductCategory] = useState(CATEGORIES[0]);
   const [newProductPriceM, setNewProductPriceM] = useState(20000);
   const [newProductPriceL, setNewProductPriceL] = useState(25000);
+  const [newProductStock, setNewProductStock] = useState('0');
   const [newProductDesc, setNewProductDesc] = useState('');
   const [newProductGradient, setNewProductGradient] = useState(GRADIENTS[0].value);
   const [savedProductPhoto, setSavedProductPhoto] = useState(null);
@@ -108,6 +113,7 @@ export default function Admin() {
   // form resep
   const [isRecipeModalOpen, setIsRecipeModalOpen] = useState(false);
   const [recipeProductId, setRecipeProductId] = useState('');
+  const [editingRecipeId, setEditingRecipeId] = useState(null);
   const [recipePrepTime, setRecipePrepTime] = useState('2 Menit');
   const [recipeIngredients, setRecipeIngredients] = useState([
     { name: '', amount_m: '', amount_l: '', unit: 'ml' },
@@ -119,6 +125,7 @@ export default function Admin() {
   // form stok bahan gudang
   const [restockActionMode, setRestockActionMode] = useState('add');
   const [restockIngName, setRestockIngName] = useState('');
+  const [restockIngredientId, setRestockIngredientId] = useState('');
   const [restockIngAmount, setRestockIngAmount] = useState('');
   const [restockIngUnit, setRestockIngUnit] = useState('ml');
   const [restockIngNote, setRestockIngNote] = useState('');
@@ -155,7 +162,7 @@ export default function Admin() {
     }, 4000);
   };
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const [resProd, resIng, resPromo, resRec, resOrd, resSet, resLogs, resUsers] = await Promise.all([
         api.get('/admin/products').then((r) => r.data).catch(() => null),
@@ -190,30 +197,33 @@ export default function Admin() {
         receipt_footer: resSet?.receipt_footer ?? '',
       });
 
-      if (ingList.length > 0 && !restockIngName) {
-        setRestockIngName(ingList[0].name);
-        setRestockIngUnit(ingList[0].unit || 'ml');
-      }
+
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [loadData]);
 
   // statistik dan status stok
   const paidOrders = orders.filter((o) => (o.status || 'paid') !== 'void');
   const totalRevenue = paidOrders.reduce((sum, o) => sum + Number(o.total || 0), 0);
   const totalOrders = paidOrders.length;
-  const satuanProducts = products.filter((p) => (p.item_type || 'satuan') === 'satuan');
+  const satuanProducts = products.filter((p) => p.item_type !== 'paketan');
+  const recipeProducts = products.filter((p) => p.item_type !== 'perporsi' && p.item_type !== 'paketan');
+  const duplicateProduct = findDuplicateName(products, newProductName, editingProductId);
+  const duplicateIngredient = !restockIngredientId && findDuplicateName(ingredients, restockIngName);
+  const duplicateRecipeIngredients = hasDuplicateNames(recipeIngredients);
+  const existingRecipe = recipes.find((r) => Number(r.product_id) === Number(recipeProductId));
+  const duplicateRecipe = existingRecipe && Number(existingRecipe.id) !== Number(editingRecipeId);
   const paketanProducts = products.filter((p) => p.item_type === 'paketan');
   const activeProducts = products.filter((p) => Number(p.active) === 1);
   const inactiveProducts = products.filter((p) => Number(p.active) !== 1);
 
   const lockedProducts = products.filter(
-    (p) => Number(p.active) === 1 && (p.is_locked || Number(p.stock) <= 3 || Number(p.stock_percent ?? 100) <= 5)
+    (p) => Number(p.active) === 1 && !(Number(p.stock_m ?? p.stock) >= 1 || Number(p.stock_l ?? p.stock) >= 1)
   );
   const warningProducts = products.filter(
     (p) =>
@@ -238,10 +248,10 @@ export default function Admin() {
   const visibleProducts = productStockFilter === 'inactive' ? inactiveProducts : activeProducts;
   const filteredAdminProducts = visibleProducts.filter((p) => {
     const pType = p.item_type || 'satuan';
-    const matchType = productTypeFilter === 'all' || pType === productTypeFilter;
+    const matchType = productTypeFilter === 'all' || (productTypeFilter === 'satuan' ? pType !== 'paketan' : pType === productTypeFilter);
     const matchCat = productTypeFilter === 'paketan' || productCategoryFilter === 'Semua' || p.category === productCategoryFilter;
 
-    const isLocked = p.is_locked || Number(p.stock) <= 3 || Number(p.stock_percent ?? 100) <= 5;
+    const isLocked = !(Number(p.stock_m ?? p.stock) >= 1 || Number(p.stock_l ?? p.stock) >= 1);
     const isWarn = !isLocked && Number(p.stock_percent ?? 100) <= 20;
     const matchStock =
       productStockFilter === 'all' || productStockFilter === 'inactive' ||
@@ -266,7 +276,7 @@ export default function Admin() {
   });
 
   // filter resep
-  const filteredRecipeProducts = products.filter((prod) => {
+  const filteredRecipeProducts = recipeProducts.filter((prod) => {
     const rec = recipes.find((r) => Number(r.product_id) === Number(prod.id));
     if (recipeStatusFilter === 'configured' && !rec) return false;
     if (recipeStatusFilter === 'unconfigured' && rec) return false;
@@ -307,6 +317,7 @@ export default function Admin() {
     setEditingProductId(null);
     setNewProductItemType(defaultType);
     setNewProductName('');
+    setNewProductStock('0');
     setNewProductCategory(defaultType === 'paketan' ? 'Bundling' : CATEGORIES[0]);
     setNewProductPriceM(defaultType === 'paketan' ? 20000 : 15000);
     setNewProductPriceL(defaultType === 'paketan' ? 23000 : 18000);
@@ -331,6 +342,7 @@ export default function Admin() {
     setNewProductCategory(prod.category);
     setNewProductPriceM(prod.price_m);
     setNewProductPriceL(prod.price_l);
+    setNewProductStock(String(prod.stock_m ?? prod.stock ?? 0));
     setNewProductDesc(prod.description || '');
     setNewProductGradient(prod.gradient || GRADIENTS[0].value);
     setSavedProductPhoto(getProductImage(prod));
@@ -379,6 +391,10 @@ export default function Admin() {
 
   const handleSaveProduct = async (e) => {
     e.preventDefault();
+    if (duplicateProduct) return showNotice('Menu sudah ada. Gunakan nama menu lain atau ubah menu yang sudah ada.', 'error');
+    if (newProductItemType === 'perporsi' && (!Number.isInteger(Number(newProductStock)) || Number(newProductStock) < 0 || newProductStock === '')) {
+      return showNotice('Stok harus berupa jumlah porsi bulat minimal 0.', 'error');
+    }
     setSavingProduct(true);
 
     const validBundleItems =
@@ -397,10 +413,9 @@ export default function Admin() {
       category: newProductItemType === 'paketan' ? 'Bundling' : newProductCategory,
       item_type: newProductItemType,
       bundle_items: validBundleItems,
-      stock: 60,
-      max_stock: 60,
+      ...(newProductItemType === 'perporsi' ? { stock: Number(newProductStock) } : !editingProductId ? { stock: 0 } : {}),
       price_m: Number(newProductPriceM),
-      price_l: Number(newProductPriceL),
+      price_l: productHasSize({ item_type: newProductItemType }, isFoodCategory(newProductCategory)) ? Number(newProductPriceL) : Number(newProductPriceM),
       description: newProductDesc,
       gradient: newProductGradient,
     };
@@ -431,10 +446,7 @@ export default function Admin() {
       if (err.response?.data?.errors?.photo) {
         setProductPhotoError('Gunakan PNG, JPG, atau WebP, maksimal 2 MB dan 2400 × 2400 piksel.');
       }
-      const msg =
-        err.response?.data?.message ||
-        Object.values(err.response?.data?.errors || {})[0]?.[0] ||
-        'Gagal menyimpan data menu.';
+      const msg = apiErrorMessage(err, 'Gagal menyimpan data menu.');
       showNotice(msg, 'error');
     } finally {
       setSavingProduct(false);
@@ -566,10 +578,12 @@ export default function Admin() {
 
   // kelola resep
   const openRecipeModalForProduct = (prodId) => {
-    const targetId = Number(prodId || products[0]?.id || 0);
+    const targetId = Number(prodId || recipeProducts[0]?.id || 0);
+    if (!recipeProducts.some((p) => Number(p.id) === targetId)) return showNotice('Pilih menu berbasis resep, bukan Per Porsi atau paketan.', 'error');
     setRecipeProductId(targetId);
 
     const existing = recipes.find((r) => Number(r.product_id) === targetId);
+    setEditingRecipeId(existing?.id ?? null);
     if (existing) {
       setRecipePrepTime(existing.prep_time || '2 Menit');
       setRecipeIngredients(
@@ -596,6 +610,7 @@ export default function Admin() {
     const idNum = Number(newProdId);
     setRecipeProductId(idNum);
     const existing = recipes.find((r) => Number(r.product_id) === idNum);
+    setEditingRecipeId(null);
     if (existing) {
       setRecipePrepTime(existing.prep_time || '2 Menit');
       setRecipeIngredients(
@@ -629,6 +644,9 @@ export default function Admin() {
 
   const handleSaveRecipe = async (e) => {
     e.preventDefault();
+    if (duplicateRecipe) return showNotice('Resep sudah ada. Gunakan Ubah Resep pada menu yang sudah ada.', 'error');
+    if (duplicateRecipeIngredients) return showNotice('Bahan sudah ada dalam resep. Gabungkan takaran pada satu baris.', 'error');
+    if (!recipeProducts.some((p) => Number(p.id) === Number(recipeProductId))) return showNotice('Menu ini tidak menggunakan resep.', 'error');
     const validIngredients = recipeIngredients.filter(
       (i) => i.name.trim() && i.amount_m.toString().trim() && i.amount_l.toString().trim()
     );
@@ -642,6 +660,7 @@ export default function Admin() {
     try {
       const { data } = await api.post('/recipes', {
         product_id: Number(recipeProductId),
+        ...(editingRecipeId ? { recipe_id: editingRecipeId } : {}),
         prep_time: recipePrepTime,
         ingredients: validIngredients,
         steps: recipeSteps,
@@ -651,10 +670,7 @@ export default function Admin() {
       setIsRecipeModalOpen(false);
       loadData();
     } catch (err) {
-      const msg =
-        err.response?.data?.message ||
-        Object.values(err.response?.data?.errors || {})[0]?.[0] ||
-        'Gagal menyimpan resep.';
+      const msg = apiErrorMessage(err, 'Gagal menyimpan resep.');
       showNotice(msg, 'error');
     } finally {
       setSavingRecipe(false);
@@ -675,6 +691,7 @@ export default function Admin() {
   // kelola stok bahan gudang
   const handleRestockIngredient = async (e) => {
     e?.preventDefault();
+    if (duplicateIngredient) return showNotice('Bahan sudah ada. Pilih bahan yang sudah ada untuk restock.', 'error');
     if (!restockIngName.trim() || !restockIngAmount || Number(restockIngAmount) <= 0) {
       showNotice('Masukkan nama bahan dan jumlah stok (gr/ml) yang valid.', 'error');
       return;
@@ -682,6 +699,7 @@ export default function Admin() {
     setSavingIngRestock(true);
     try {
       const { data } = await api.post('/ingredients/restock', {
+        ...(restockIngredientId ? { ingredient_id: Number(restockIngredientId) } : {}),
         name: restockIngName.trim(),
         amount: Number(restockIngAmount),
         unit: restockIngUnit,
@@ -697,7 +715,7 @@ export default function Admin() {
       setRestockIngNote('');
       loadData();
     } catch (err) {
-      const msg = err.response?.data?.message || 'Gagal memperbarui stok bahan baku gudang.';
+      const msg = apiErrorMessage(err, 'Gagal memperbarui stok bahan baku gudang.');
       showNotice(msg, 'error');
     } finally {
       setSavingIngRestock(false);
@@ -914,7 +932,7 @@ export default function Admin() {
           {lockedProducts.length > 0 && (
             <div className="stock-alert-group locked">
               <span className="stock-alert-label">
-                <IconLock size={13} /> Menu Terkunci di Kasir (≤ 5% atau ≤ 3 porsi)
+                <IconLock size={13} /> Menu Terkunci di Kasir (Tidak cukup 1 porsi)
               </span>
               <div className="stock-alert-pills">
                 {lockedProducts.map((p) => (
@@ -947,8 +965,14 @@ export default function Admin() {
 
   return (
     <div className="app">
+      {/* scrim sidebar mobile */}
+      <div
+        className={`sidebar-scrim ${sidebarOpen ? 'show' : ''}`}
+        onClick={() => setSidebarOpen(false)}
+      />
+
       {/* sidebar admin */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-brand">
           <div className="logo-ring small">
             <img src={savedLogo} alt="" />
@@ -957,13 +981,24 @@ export default function Admin() {
             <strong>{settings.store_name || 'VERSI KOPI'}</strong>
             <small>Administrator</small>
           </div>
+          <button
+            type="button"
+            className="sidebar-close"
+            aria-label="Tutup menu"
+            onClick={() => setSidebarOpen(false)}
+          >
+            ✕
+          </button>
         </div>
 
         <nav className="nav">
           <button
             type="button"
             className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setActiveTab('dashboard')}
+            onClick={() => {
+              setActiveTab('dashboard');
+              setSidebarOpen(false);
+            }}
           >
             <span className="nav-icon">
               <IconChart size={18} />
@@ -973,7 +1008,10 @@ export default function Admin() {
           <button
             type="button"
             className={`nav-item ${activeTab === 'products' ? 'active' : ''}`}
-            onClick={() => setActiveTab('products')}
+            onClick={() => {
+              setActiveTab('products');
+              setSidebarOpen(false);
+            }}
           >
             <span className="nav-icon">
               <IconCup size={18} />
@@ -984,7 +1022,10 @@ export default function Admin() {
           <button
             type="button"
             className={`nav-item ${activeTab === 'promos' ? 'active' : ''}`}
-            onClick={() => setActiveTab('promos')}
+            onClick={() => {
+              setActiveTab('promos');
+              setSidebarOpen(false);
+            }}
           >
             <span className="nav-icon">
               <IconTag size={18} />
@@ -995,7 +1036,10 @@ export default function Admin() {
           <button
             type="button"
             className={`nav-item ${activeTab === 'recipes' ? 'active' : ''}`}
-            onClick={() => setActiveTab('recipes')}
+            onClick={() => {
+              setActiveTab('recipes');
+              setSidebarOpen(false);
+            }}
           >
             <span className="nav-icon">
               <IconBook size={18} />
@@ -1006,7 +1050,10 @@ export default function Admin() {
           <button
             type="button"
             className={`nav-item ${activeTab === 'restock' ? 'active' : ''}`}
-            onClick={() => setActiveTab('restock')}
+            onClick={() => {
+              setActiveTab('restock');
+              setSidebarOpen(false);
+            }}
           >
             <span className="nav-icon">
               <IconBox size={18} />
@@ -1019,7 +1066,10 @@ export default function Admin() {
           <button
             type="button"
             className={`nav-item ${activeTab === 'users' ? 'active' : ''}`}
-            onClick={() => setActiveTab('users')}
+            onClick={() => {
+              setActiveTab('users');
+              setSidebarOpen(false);
+            }}
           >
             <span className="nav-icon">
               <IconReceipt size={18} />
@@ -1030,7 +1080,10 @@ export default function Admin() {
           <button
             type="button"
             className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
-            onClick={() => setActiveTab('settings')}
+            onClick={() => {
+              setActiveTab('settings');
+              setSidebarOpen(false);
+            }}
           >
             <span className="nav-icon">
               <IconSettings size={18} />
@@ -1048,6 +1101,16 @@ export default function Admin() {
 
       <main className="app-main">
         <header className="topbar">
+          <button
+            type="button"
+            className="hamburger"
+            aria-label="Buka navigasi"
+            onClick={() => setSidebarOpen(true)}
+          >
+            <span />
+            <span />
+            <span />
+          </button>
           <div className="topbar-title">
             <h1>
               {activeTab === 'dashboard'
@@ -1134,7 +1197,7 @@ export default function Admin() {
                     {warningProducts.length} / {lockedProducts.length}
                   </div>
                   <div className="stat-sub">
-                    {warningProducts.length} menipis (≤20%) • {lockedProducts.length} terkunci (≤5%)
+                    {warningProducts.length} menipis (≤20%) • {lockedProducts.length} terkunci (Tidak cukup 1 porsi)
                   </div>
                 </div>
               </div>
@@ -1210,7 +1273,7 @@ export default function Admin() {
             <div>
               <div className="section-head">
                 <div>
-                  <h2>Daftar Menu Satuan & Paketan</h2>
+
                 </div>
                 <div className="head-action" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                   <button
@@ -1249,7 +1312,7 @@ export default function Admin() {
                     >
                       <IconCup size={15} />
                       <span>Menu Satuan</span>
-                      <em className="pos-seg-count">{visibleProducts.filter((p) => (p.item_type || 'satuan') === 'satuan').length}</em>
+                      <em className="pos-seg-count">{visibleProducts.filter((p) => p.item_type !== 'paketan').length}</em>
                     </button>
                     <button
                       type="button"
@@ -1309,7 +1372,7 @@ export default function Admin() {
                     className={`pos-cat-pill ${productStockFilter === 'locked' ? 'active' : ''}`}
                     onClick={() => setProductStockFilter((prev) => (prev === 'locked' ? 'all' : 'locked'))}
                   >
-                    Terkunci ≤5% ({lockedProducts.length})
+                    Terkunci: Tidak cukup 1 porsi ({lockedProducts.length})
                   </button>
                 </div>
               </div>
@@ -1334,7 +1397,7 @@ export default function Admin() {
                   {filteredAdminProducts.map((p) => {
                     const hasRecipe = recipes.some((r) => Number(r.product_id) === Number(p.id));
                     const pct = Number(p.stock_percent ?? 100);
-                    const isLocked = Boolean(p.is_locked || p.stock <= 3 || pct <= 5);
+                    const isLocked = !(Number(p.stock_m ?? p.stock) >= 1 || Number(p.stock_l ?? p.stock) >= 1);
                     const isWarning = !isLocked && pct <= 20;
 
                     return (
@@ -1361,7 +1424,7 @@ export default function Admin() {
                               <span
                                 className={`badge ${p.item_type === 'paketan' ? 'badge-amber' : 'badge-brown'}`}
                               >
-                                {p.item_type === 'paketan' ? 'Paketan' : `Satuan • ${p.category}`}
+                                {p.item_type === 'paketan' ? 'Paketan' : `${p.item_type === 'perporsi' ? 'Per Porsi' : 'Satuan'} • ${p.category}`}
                               </span>
                               <span
                                 className={`badge ${
@@ -1369,10 +1432,10 @@ export default function Admin() {
                                 }`}
                               >
                                 {Number(p.active) !== 1 ? 'Nonaktif' : isLocked
-                                  ? 'Terkunci (≤5% / ≤3)'
+                                  ? 'Terkunci (Tidak cukup 1 porsi)'
                                   : isWarning
                                   ? 'Menipis (≤20%)'
-                                  : 'Stok Bahan Aman'}
+                                  : p.item_type === 'perporsi' ? 'Stok Porsi Aman' : 'Stok Bahan Aman'}
                               </span>
                             </div>
                             <h3 className="admin-menu-title">{p.name}</h3>
@@ -1382,23 +1445,36 @@ export default function Admin() {
 
                         <div className="admin-menu-stats">
                           <div className="admin-menu-stat-box">
-                            <small>Harga (Regular M / Large L)</small>
+                            <small>
+                              {p.item_type === 'paketan'
+                                ? 'Harga Paket'
+                                : isFoodCategory(p.category) || p.item_type === 'perporsi'
+                                ? 'Harga Porsi'
+                                : 'Harga (Regular M / Large L)'}
+                            </small>
                             <strong>
-                              Rp {Number(p.price_m).toLocaleString('id-ID')}{' '}
-                              <span>/ Rp {Number(p.price_l).toLocaleString('id-ID')}</span>
+                              Rp {Number(p.price_m).toLocaleString('id-ID')}
+                              {productHasSize(p, isFoodCategory(p.category)) && (
+                                <>
+                                  {' '}
+                                  <span>/ Rp {Number(p.price_l).toLocaleString('id-ID')}</span>
+                                </>
+                              )}
                             </strong>
                           </div>
                           <div className="admin-menu-stat-box">
-                            <small>Kapasitas Porsi Gudang</small>
+                            <small>{p.item_type === 'perporsi' ? 'Stok Porsi' : 'Kapasitas Porsi Gudang'}</small>
                             <strong className={isLocked ? 'text-red' : isWarning ? 'text-amber' : 'text-green'}>
-                              Bisa dibuat: {p.stock} porsi ({pct}%)
+                              {productHasSize(p, isFoodCategory(p.category))
+                                ? `Bisa dibuat: ${p.stock_m ?? p.stock} porsi M / ${p.stock_l ?? p.stock} porsi L (${pct}%)`
+                                : `Tersedia: ${p.stock_m ?? p.stock} porsi (${pct}%)`}
                             </strong>
                           </div>
                         </div>
 
                         <div className="pos-meter-wrap" style={{ marginTop: 0 }}>
                           <div className="pos-meter-labels">
-                            <span>{p.limiting_reason || 'Stok bahan baku'}</span>
+                            <span>{p.item_type === 'perporsi' ? 'Stok per porsi' : p.limiting_reason || 'Stok bahan baku'}</span>
                             <strong>{pct}%</strong>
                           </div>
                           <div className="pos-meter-track">
@@ -1420,6 +1496,8 @@ export default function Admin() {
                                 </span>
                               ))}
                             </div>
+                          ) : p.item_type === 'perporsi' ? (
+                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => openEditProductModal(p)}>Atur Stok Porsi</button>
                           ) : (
                             <button
                               type="button"
@@ -1467,7 +1545,7 @@ export default function Admin() {
             <div>
               <div className="section-head">
                 <div>
-                  <h2>Manajemen Promo & Voucher Toko</h2>
+
                   <p>Buat kode promo diskon persentase (%) maupun potongan harga tetap (Rp) untuk kasir.</p>
                 </div>
                 <div className="head-action">
@@ -1569,7 +1647,7 @@ export default function Admin() {
             <div>
               <div className="section-head">
                 <div>
-                  <h2>Resep & Takaran</h2>
+
                   <p>Stok bahan baku</p>
                 </div>
                 <div className="head-action">
@@ -1577,13 +1655,14 @@ export default function Admin() {
                     type="button"
                     className="btn btn-primary"
                     onClick={() => {
-                      const unreciped = products.find(
+                      const unreciped = recipeProducts.find(
                         (p) => !recipes.some((r) => Number(r.product_id) === Number(p.id))
                       );
-                      openRecipeModalForProduct(unreciped?.id || products[0]?.id);
+                      if (unreciped) openRecipeModalForProduct(unreciped.id);
+                      else showNotice('Resep sudah ada. Gunakan Ubah Resep pada menu yang sudah ada.', 'error');
                     }}
                   >
-                    + Tambah / Atur Resep
+                    + Tambah Resep
                   </button>
                 </div>
               </div>
@@ -1605,9 +1684,9 @@ export default function Admin() {
                 </div>
                 <div className="chips">
                   {[
-                    { id: 'all', label: `Semua Menu (${products.length})` },
-                    { id: 'configured', label: `Sudah Ada Resep (${recipes.length})` },
-                    { id: 'unconfigured', label: `Belum Diatur (${Math.max(0, products.length - recipes.length)})` },
+                    { id: 'all', label: `Semua Menu (${recipeProducts.length})` },
+                    { id: 'configured', label: `Sudah Ada Resep (${recipeProducts.filter((p) => recipes.some((r) => Number(r.product_id) === Number(p.id))).length})` },
+                    { id: 'unconfigured', label: `Belum Diatur (${recipeProducts.filter((p) => !recipes.some((r) => Number(r.product_id) === Number(p.id))).length})` },
                   ].map((f) => (
                     <button
                       key={f.id}
@@ -1762,30 +1841,31 @@ export default function Admin() {
 
                     <form onSubmit={handleRestockIngredient}>
                       <label className="field">
-                        <span className="field-label">Pilih / Ketik Nama Bahan Baku</span>
+                        <span className="field-label">Bahan yang Akan Dikelola</span>
+                        <select className="select" value={restockIngredientId} onChange={(e) => {
+                          const id = e.target.value;
+                          const selected = ingredients.find((ing) => String(ing.id) === id);
+                          setRestockIngredientId(id);
+                          setRestockIngName(selected?.name || '');
+                          setRestockIngUnit(selected?.unit || 'ml');
+                          setRestockIngAmount('');
+                        }}>
+                          <option value="">+ Buat Bahan Baru</option>
+                          {ingredients.map((ing) => <option key={ing.id} value={ing.id}>{ing.name} — {ing.stock_amount} {ing.unit}</option>)}
+                        </select>
+                      </label>
+                      <label className="field" style={{ marginTop: '16px' }}>
+                        <span className="field-label">{restockIngredientId ? 'Nama Bahan Terpilih' : 'Nama Bahan Baru'}</span>
                         <input
                           type="text"
                           required
-                          list="admin-ing-list"
+                          readOnly={Boolean(restockIngredientId)}
                           className="input"
                           placeholder="Contoh: Espresso House Blend"
                           value={restockIngName}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setRestockIngName(val);
-                            const found = ingredients.find(
-                              (i) => (i.name || '').toLowerCase() === val.trim().toLowerCase()
-                            );
-                            if (found) setRestockIngUnit(found.unit);
-                          }}
+                          onChange={(e) => setRestockIngName(e.target.value)}
                         />
-                        <datalist id="admin-ing-list">
-                          {ingredients.map((ing) => (
-                            <option key={ing.id} value={ing.name}>
-                              Sisa: {ing.stock_amount} {ing.unit} ({ing.stock_percent}%)
-                            </option>
-                          ))}
-                        </datalist>
+                        {duplicateIngredient && <small role="alert" className="text-red">Bahan sudah ada. Pilih bahan yang sudah ada untuk restock.</small>}
                       </label>
 
                       <div className="form-grid" style={{ marginTop: '16px' }}>
@@ -1813,6 +1893,7 @@ export default function Admin() {
                           <select
                             className="select"
                             value={restockIngUnit}
+                            disabled={Boolean(restockIngredientId)}
                             onChange={(e) => setRestockIngUnit(e.target.value)}
                           >
                             {RECIPE_UNITS.map((u) => (
@@ -1838,7 +1919,7 @@ export default function Admin() {
 
                       <button
                         type="submit"
-                        disabled={savingIngRestock}
+                        disabled={savingIngRestock || Boolean(duplicateIngredient)}
                         className="btn btn-primary btn-block"
                         style={{ marginTop: '22px' }}
                       >
@@ -1933,6 +2014,7 @@ export default function Admin() {
                                   style={{ justifyContent: 'center', whiteSpace: 'nowrap' }}
                                   onClick={() => {
                                     setRestockActionMode('add');
+                                    setRestockIngredientId(String(ing.id));
                                     setRestockIngName(ing.name);
                                     setRestockIngUnit(ing.unit);
                                     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1946,6 +2028,7 @@ export default function Admin() {
                                   style={{ justifyContent: 'center', whiteSpace: 'nowrap' }}
                                   onClick={() => {
                                     setRestockActionMode('set');
+                                    setRestockIngredientId(String(ing.id));
                                     setRestockIngName(ing.name);
                                     setRestockIngUnit(ing.unit);
                                     setRestockIngAmount(String(ing.max_amount));
@@ -2493,6 +2576,10 @@ export default function Admin() {
                       >
                         Menu Satuan
                       </button>
+                      <button type="button" className={`chip ${newProductItemType === 'perporsi' ? 'active' : ''}`} onClick={() => {
+                        setNewProductItemType('perporsi');
+                        if (newProductCategory === 'Bundling') setNewProductCategory('Snack');
+                      }}>Per Porsi (Tanpa Resep)</button>
                       <button
                         type="button"
                         className={`chip ${newProductItemType === 'paketan' ? 'active' : ''}`}
@@ -2520,6 +2607,7 @@ export default function Admin() {
                       value={newProductName}
                       onChange={(e) => setNewProductName(e.target.value)}
                     />
+                    {duplicateProduct && <small role="alert" className="text-red">Menu sudah ada. Gunakan nama lain atau ubah menu yang sudah ada.</small>}
                   </label>
 
                   <label className="field">
@@ -2527,7 +2615,10 @@ export default function Admin() {
                     <select
                       className="select"
                       value={newProductCategory}
-                      onChange={(e) => setNewProductCategory(e.target.value)}
+                      onChange={(e) => {
+                        setNewProductCategory(e.target.value);
+                        if (!editingProductId && isFoodCategory(e.target.value) && newProductItemType !== 'paketan') setNewProductItemType('perporsi');
+                      }}
                     >
                       {CATEGORIES.map((cat) => (
                         <option key={cat} value={cat}>
@@ -2537,35 +2628,57 @@ export default function Admin() {
                     </select>
                   </label>
 
-                  <label className="field">
-                    <span className="field-label">Harga Regular / M (Rp)</span>
+                  <label className={`field ${!productHasSize({ item_type: newProductItemType }, isFoodCategory(newProductCategory)) ? 'span-2' : ''}`}>
+                    <span className="field-label">
+                      {newProductItemType === 'paketan'
+                        ? 'Harga Paket (Rp)'
+                        : isFoodCategory(newProductCategory) || newProductItemType === 'perporsi'
+                        ? 'Harga Porsi (Rp)'
+                        : 'Harga Regular / M (Rp)'}
+                    </span>
                     <input
                       type="number"
                       min="0"
                       required
                       className="input"
                       value={newProductPriceM}
-                      onChange={(e) => setNewProductPriceM(e.target.value)}
+                      onChange={(e) => {
+                        setNewProductPriceM(e.target.value);
+                        if (!productHasSize({ item_type: newProductItemType }, isFoodCategory(newProductCategory))) {
+                          setNewProductPriceL(e.target.value);
+                        }
+                      }}
                     />
                   </label>
 
-                  <label className="field">
-                    <span className="field-label">Harga Large / L (Rp)</span>
-                    <input
-                      type="number"
-                      min="0"
-                      required
-                      className="input"
-                      value={newProductPriceL}
-                      onChange={(e) => setNewProductPriceL(e.target.value)}
-                    />
-                  </label>
+                  {productHasSize({ item_type: newProductItemType }, isFoodCategory(newProductCategory)) && (
+                    <label className="field">
+                      <span className="field-label">Harga Large / L (Rp)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        required
+                        className="input"
+                        value={newProductPriceL}
+                        onChange={(e) => setNewProductPriceL(e.target.value)}
+                      />
+                    </label>
+                  )}
+
+                  {newProductItemType === 'perporsi' && (
+                    <label className="field span-2">
+                      <span className="field-label">{editingProductId ? 'Atur Stok Tersedia (porsi)' : 'Stok Awal (porsi)'}</span>
+                      <input type="number" className="input" required min="0" max="1000000" step="1" value={newProductStock} onChange={(e) => setNewProductStock(e.target.value)} />
+                      <small>Jumlah porsi bulat, satu harga, tanpa ukuran, gula, atau bahan resep. Simpan untuk menerapkan perubahan.</small>
+                      {editingProductId && products.find((p) => p.id === editingProductId)?.item_type !== 'perporsi' && <small role="status">Menu akan diubah menjadi Per Porsi saat disimpan. Resep lama tidak digunakan.</small>}
+                    </label>
+                  )}
 
                   {newProductItemType === 'paketan' && (
                     <div className="field span-2">
                       <div className="recipe-editor-head">
                         <span className="field-label">
-                          Isi Komponen Menu Paketan (Otomatis menggunakan bahan baku dari item satuan di dalamnya)
+                          Isi Komponen Menu Paketan (stok bahan resep dan stok Per Porsi)
                         </span>
                         <button type="button" className="btn btn-soft btn-sm" onClick={addBundleRow}>
                           + Tambah Item Paket
@@ -2661,7 +2774,7 @@ export default function Admin() {
                 >
                   Batal
                 </button>
-                <button type="submit" disabled={savingProduct} className="btn btn-primary">
+                <button type="submit" disabled={savingProduct || Boolean(duplicateProduct)} className="btn btn-primary">
                   {savingProduct ? 'Menyimpan...' : 'Simpan Menu'}
                 </button>
               </div>
@@ -2693,7 +2806,7 @@ export default function Admin() {
                       value={recipeProductId}
                       onChange={(e) => handleSelectRecipeProductChange(e.target.value)}
                     >
-                      {products.map((p) => (
+                      {recipeProducts.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name} ({p.category})
                         </option>
@@ -2714,6 +2827,11 @@ export default function Admin() {
                   </label>
                 </div>
 
+                {duplicateRecipe && <div role="alert">
+                  <p className="text-red">Resep sudah ada. Gunakan Ubah Resep pada menu yang sudah ada.</p>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => openRecipeModalForProduct(recipeProductId)}>Ubah Resep Ini</button>
+                </div>}
+                {duplicateRecipeIngredients && <p role="alert" className="text-red">Bahan sudah ada dalam resep. Gabungkan takaran pada satu baris.</p>}
                 <div className="recipe-editor-section">
                   <div className="recipe-editor-head">
                     <span className="field-label">Daftar Bahan Baku Gudang & Takaran per Cup (gr / ml)</span>
@@ -2823,7 +2941,7 @@ export default function Admin() {
                 >
                   Batal
                 </button>
-                <button type="submit" disabled={savingRecipe} className="btn btn-primary">
+                <button type="submit" disabled={savingRecipe || Boolean(duplicateRecipe) || duplicateRecipeIngredients} className="btn btn-primary">
                   {savingRecipe ? 'Menyimpan...' : 'Simpan Resep'}
                 </button>
               </div>

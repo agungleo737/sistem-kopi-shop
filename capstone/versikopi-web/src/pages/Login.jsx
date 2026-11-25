@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/useAuth';
 import { IconBolt, IconChart, IconCashier, IconShield, IconEye } from '../components/Icons';
 import api from '../lib/api';
 import { getStoreLogo } from '../lib/branding';
@@ -104,7 +104,7 @@ export default function Login() {
   const handleSelectRole = (selectedRole) => {
     setRole(selectedRole);
     setError('');
-    setEmail(selectedRole === 'admin' ? 'admin@versikopi.test' : 'kasir@versikopi.test');
+    setEmail('');
   };
 
   const handleSubmit = async (e) => {
@@ -299,7 +299,7 @@ export default function Login() {
           )}
 
           <div className="demo-hint">
-            Akun uji: <strong>admin@versikopi.test</strong> atau <strong>kasir@versikopi.test</strong> (Password: <strong>password</strong>)
+            Akun Admin disediakan oleh pemilik usaha. Untuk akses Kasir, hubungi Admin.
           </div>
         </div>
       </div>

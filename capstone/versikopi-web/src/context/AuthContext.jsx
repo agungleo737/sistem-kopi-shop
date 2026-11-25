@@ -1,7 +1,6 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
+import AuthContext from './auth-context'
 import api from '../lib/api'
-
-const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
@@ -42,6 +41,7 @@ export function AuthProvider({ children }) {
     try {
       await api.post('/logout')
     } catch {
+      // Revoke the local session even if the server token has already expired.
     }
     localStorage.removeItem('token')
     localStorage.removeItem('user')
@@ -54,5 +54,3 @@ export function AuthProvider({ children }) {
     </AuthContext.Provider>
   )
 }
-
-export const useAuth = () => useContext(AuthContext)
