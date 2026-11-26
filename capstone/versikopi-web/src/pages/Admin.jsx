@@ -63,6 +63,9 @@ export default function Admin() {
 
   // filter pencarian admin
   const [dashOrderSearch, setDashOrderSearch] = useState('');
+  const [reportPeriod, setReportPeriod] = useState('all');
+  const [reportFrom, setReportFrom] = useState('');
+  const [reportTo, setReportTo] = useState('');
   const [productSearch, setProductSearch] = useState('');
   const [productTypeFilter, setProductTypeFilter] = useState('all');
   const [productCategoryFilter, setProductCategoryFilter] = useState('Semua');
@@ -207,10 +210,80 @@ export default function Admin() {
     loadData();
   }, [loadData]);
 
-  // statistik dan status stok
-  const paidOrders = orders.filter((o) => (o.status || 'paid') !== 'void');
+  // filter periode laporan penjualan
+  const isOrderInPeriod = (o) => {
+    if (reportPeriod === 'all') return true;
+    const d = new Date(o.created_at);
+    if (Number.isNaN(d.getTime())) return false;
+    const now = new Date();
+    if (reportPeriod === 'today') {
+      return (
+        d.getFullYear() === now.getFullYear() &&
+        d.getMonth() === now.getMonth() &&
+        d.getDate() === now.getDate()
+      );
+    }
+    if (reportPeriod === '7d') {
+      const start = new Date(now);
+      start.setHours(0, 0, 0, 0);
+      start.setDate(start.getDate() - 6);
+      return d >= start;
+    }
+    if (reportPeriod === 'month') {
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    }
+    if (reportPeriod === 'custom') {
+      if (reportFrom) {
+        const fromDate = new Date(`${reportFrom}T00:00:00`);
+        if (d < fromDate) return false;
+      }
+      if (reportTo) {
+        const toDate = new Date(`${reportTo}T23:59:59`);
+        if (d > toDate) return false;
+      }
+      return true;
+    }
+    return true;
+  };
+
+  // statistik rekap penjualan dan menu terlaris
+  const periodOrders = orders.filter(isOrderInPeriod);
+  const paidOrders = periodOrders.filter((o) => (o.status || 'paid') !== 'void');
   const totalRevenue = paidOrders.reduce((sum, o) => sum + Number(o.total || 0), 0);
   const totalOrders = paidOrders.length;
+  const cashOrders = paidOrders.filter((o) => o.payment_method === 'cash');
+  const qrisOrders = paidOrders.filter((o) => o.payment_method === 'qris');
+  const cashRevenue = cashOrders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+  const qrisRevenue = qrisOrders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+
+  const topMenusMap = {};
+  paidOrders.forEach((o) => {
+    let parsedItems = [];
+    if (Array.isArray(o.items)) {
+      parsedItems = o.items;
+    } else if (typeof o.items === 'string') {
+      try {
+        const arr = JSON.parse(o.items);
+        if (Array.isArray(arr)) parsedItems = arr;
+      } catch {
+        parsedItems = [];
+      }
+    }
+    parsedItems.forEach((it) => {
+      const name = (it.name || 'Menu').trim();
+      const qty = Number(it.qty || 1);
+      const rev = Number(it.unit_price || 0) * qty;
+      if (!topMenusMap[name]) {
+        topMenusMap[name] = { name, qty: 0, revenue: 0 };
+      }
+      topMenusMap[name].qty += qty;
+      topMenusMap[name].revenue += rev;
+    });
+  });
+  const topMenus = Object.values(topMenusMap)
+    .sort((a, b) => b.qty - a.qty || b.revenue - a.revenue)
+    .slice(0, 8);
+  const topMenuMaxQty = topMenus.length > 0 ? Math.max(1, topMenus[0].qty) : 1;
   const satuanProducts = products.filter((p) => p.item_type !== 'paketan');
   const recipeProducts = products.filter((p) => p.item_type !== 'perporsi' && p.item_type !== 'paketan');
   const duplicateProduct = findDuplicateName(products, newProductName, editingProductId);
@@ -234,7 +307,7 @@ export default function Admin() {
   const alertIngredients = ingredients.filter((ing) => ing.is_locked || ing.is_warning);
 
   // filter pesanan terbaru
-  const filteredDashOrders = orders.filter((o) => {
+  const filteredDashOrders = periodOrders.filter((o) => {
     const q = dashOrderSearch.trim().toLowerCase();
     if (!q) return true;
     return (
@@ -1148,42 +1221,79 @@ export default function Admin() {
             <div>
               {renderStockAlertBanner()}
 
+              {/* filter periode laporan */}
+              <div className="filter-bar" style={{ marginBottom: '18px' }}>
+                <div className="chips">
+                  {[
+                    { id: 'all', label: 'Semua Waktu' },
+                    { id: 'today', label: 'Hari Ini' },
+                    { id: '7d', label: '7 Hari Terakhir' },
+                    { id: 'month', label: 'Bulan Ini' },
+                    { id: 'custom', label: 'Pilih Tanggal' },
+                  ].map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`chip ${reportPeriod === p.id ? 'active' : ''}`}
+                      onClick={() => setReportPeriod(p.id)}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                {reportPeriod === 'custom' && (
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      type="date"
+                      className="input"
+                      style={{ width: 'auto', padding: '7px 10px' }}
+                      value={reportFrom}
+                      onChange={(e) => setReportFrom(e.target.value)}
+                    />
+                    <span style={{ fontSize: '12px', color: 'var(--muted)' }}>s/d</span>
+                    <input
+                      type="date"
+                      className="input"
+                      style={{ width: 'auto', padding: '7px 10px' }}
+                      value={reportTo}
+                      onChange={(e) => setReportTo(e.target.value)}
+                    />
+                  </div>
+                )}
+              </div>
+
               <div className="stat-grid">
                 <div className="stat-card">
                   <div className="stat-top">
                     <span className="stat-icon">
                       <IconWallet size={16} />
                     </span>
-                    <span className="stat-label">Total Pendapatan</span>
+                    <span className="stat-label">Total Omzet</span>
                   </div>
                   <div className="stat-value">Rp {totalRevenue.toLocaleString('id-ID')}</div>
-                  <div className="stat-sub">Akumulasi dari {totalOrders} transaksi</div>
+                  <div className="stat-sub">Dari {totalOrders} transaksi sukses</div>
                 </div>
 
                 <div className="stat-card">
                   <div className="stat-top">
                     <span className="stat-icon">
-                      <IconCup size={16} />
+                      <IconReceipt size={16} />
                     </span>
-                    <span className="stat-label">Menu Satuan & Paketan</span>
+                    <span className="stat-label">Tunai (Cash)</span>
                   </div>
-                  <div className="stat-value">
-                    {satuanProducts.length} / {paketanProducts.length}
-                  </div>
-                  <div className="stat-sub">
-                    {satuanProducts.length} menu satuan • {paketanProducts.length} menu paketan
-                  </div>
+                  <div className="stat-value">Rp {cashRevenue.toLocaleString('id-ID')}</div>
+                  <div className="stat-sub">{cashOrders.length} transaksi tunai</div>
                 </div>
 
                 <div className="stat-card">
                   <div className="stat-top">
                     <span className="stat-icon">
-                      <IconBox size={16} />
+                      <IconChart size={16} />
                     </span>
-                    <span className="stat-label">Bahan Baku Gudang</span>
+                    <span className="stat-label">QRIS</span>
                   </div>
-                  <div className="stat-value">{ingredients.length} Bahan</div>
-                  <div className="stat-sub">Stok bahan baku</div>
+                  <div className="stat-value">Rp {qrisRevenue.toLocaleString('id-ID')}</div>
+                  <div className="stat-sub">{qrisOrders.length} transaksi QRIS</div>
                 </div>
 
                 <div className="stat-card">
@@ -1197,8 +1307,53 @@ export default function Admin() {
                     {warningProducts.length} / {lockedProducts.length}
                   </div>
                   <div className="stat-sub">
-                    {warningProducts.length} menipis (≤20%) • {lockedProducts.length} terkunci (Tidak cukup 1 porsi)
+                    {warningProducts.length} menipis (≤20%) • {lockedProducts.length} terkunci
                   </div>
+                </div>
+              </div>
+
+              {/* rekap menu terlaris */}
+              <div className="card" style={{ marginBottom: '20px' }}>
+                <div className="card-head">
+                  <div>
+                    <h3>Menu Terlaris</h3>
+                    <p>Urutan menu dengan penjualan terbanyak pada periode terpilih</p>
+                  </div>
+                </div>
+                <div className="card-pad">
+                  {topMenus.length === 0 ? (
+                    <div className="empty">
+                      <strong>Belum Ada Data Penjualan</strong>
+                      <p>Belum ada transaksi pada periode yang dipilih.</p>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gap: '12px' }}>
+                      {topMenus.map((item, idx) => (
+                        <div key={item.name} style={{ display: 'grid', gap: '6px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              <span className={`badge ${idx === 0 ? 'badge-amber' : 'badge-brown'}`}>#{idx + 1}</span>
+                              <strong style={{ color: 'var(--coffee-900)', fontSize: '13.5px' }}>{item.name}</strong>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '12.5px' }}>
+                              <span style={{ color: 'var(--muted)' }}>
+                                <strong>{item.qty}</strong> terjual
+                              </span>
+                              <strong style={{ color: 'var(--coffee-800)' }}>
+                                Rp {item.revenue.toLocaleString('id-ID')}
+                              </strong>
+                            </div>
+                          </div>
+                          <div className="pos-meter-track" style={{ height: '6px' }}>
+                            <div
+                              className="pos-meter-fill safe"
+                              style={{ width: `${Math.max(8, Math.round((item.qty / topMenuMaxQty) * 100))}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 

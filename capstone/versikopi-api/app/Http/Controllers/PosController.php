@@ -843,12 +843,18 @@ class PosController extends Controller
         return response()->json(['logs' => $logs]);
     }
 
-    public function getOrders()
+    public function getOrders(Request $request)
     {
-        $orders = DB::table('orders')
-            ->orderBy('id', 'desc')
-            ->limit(200)
-            ->get();
+        $query = DB::table('orders')->orderBy('id', 'desc');
+
+        if ($request->filled('from')) {
+            $query->whereDate('created_at', '>=', (string) $request->query('from'));
+        }
+        if ($request->filled('to')) {
+            $query->whereDate('created_at', '<=', (string) $request->query('to'));
+        }
+
+        $orders = $query->limit(2000)->get();
 
         return response()->json(['orders' => $orders]);
     }

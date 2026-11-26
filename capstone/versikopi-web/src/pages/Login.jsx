@@ -297,10 +297,6 @@ export default function Login() {
               </form>
             </>
           )}
-
-          <div className="demo-hint">
-            Akun Admin disediakan oleh pemilik usaha. Untuk akses Kasir, hubungi Admin.
-          </div>
         </div>
       </div>
 
